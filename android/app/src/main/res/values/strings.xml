@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">DefectCam</string>
+    <string name="status_initializing">Starting camera…</string>
+    <string name="status_streaming">Streaming to backend</string>
+    <string name="status_paused">Streaming paused</string>
+    <string name="status_permission_denied">Camera permission is required</string>
+    <string name="hint_server_url">Server URL, e.g. http://192.168.1.100:5000/upload</string>
+    <string name="hint_device_id">Device label, e.g. Phone-1</string>
+    <string name="action_apply">Apply</string>
+    <string name="toggle_streaming_on">Streaming: ON</string>
+    <string name="toggle_streaming_off">Streaming: OFF</string>
+</resources>
