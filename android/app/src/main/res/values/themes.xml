@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.DefectCam" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#1976D2</item>
+        <item name="colorPrimaryDark">#0D47A1</item>
+        <item name="colorAccent">#03A9F4</item>
+        <item name="android:windowBackground">#000000</item>
+    </style>
+</resources>
