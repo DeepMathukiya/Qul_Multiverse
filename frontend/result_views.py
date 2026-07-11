@@ -235,18 +235,39 @@ def render_timings(result: dict) -> None:
 
 
 def render_full_result(result: dict) -> None:
+    """Main view: everything is drawn ON the stream frame itself.
+
+    The classic section-by-section report stays available in an expander.
+    """
     render_decision_banner(result)
-    render_camera_images(result)
-    st.divider()
-    render_ocr(result)
-    st.divider()
-    render_dimensions_2d(result)
-    st.divider()
-    render_dimensions_3d(result)
-    st.divider()
-    render_surface_defects(result)
-    st.divider()
-    render_pothole(result)
-    st.divider()
-    render_quality_checks(result)
-    render_timings(result)
+
+    images = result.get("images", {})
+    if "annotated" in images:
+        _show_image(images, "annotated", "Inspection stream (all results overlaid)")
+    else:
+        # Older results without the composite frame fall back to raw cameras.
+        render_camera_images(result)
+
+    quality = result.get("quality") or {}
+    total = len(quality.get("checks", []))
+    failed = sum(1 for c in quality.get("checks", []) if c["status"] == "FAIL")
+    st.caption(
+        f"checks: {total - failed}/{total} passed · "
+        f"processing: {result.get('total_time_ms', 0):.0f} ms"
+    )
+
+    with st.expander("📋 Detailed report"):
+        render_camera_images(result)
+        st.divider()
+        render_ocr(result)
+        st.divider()
+        render_dimensions_2d(result)
+        st.divider()
+        render_dimensions_3d(result)
+        st.divider()
+        render_surface_defects(result)
+        st.divider()
+        render_pothole(result)
+        st.divider()
+        render_quality_checks(result)
+        render_timings(result)

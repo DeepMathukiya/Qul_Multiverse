@@ -97,3 +97,77 @@ def draw_pothole_detections(
         cv2.putText(out, f"pothole {det.confidence:.2f} [{det.severity}]",
                     (x1, max(y1 - 8, 14)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, RED, 2)
     return out
+
+
+def compose_annotated_frame(
+    frame: np.ndarray,
+    roi_rect: tuple[int, int, int, int],
+    boundary,
+    mm_per_px: float | None,
+    crack_components: list,
+    scratch_components: list,
+    dent_mask: np.ndarray | None,
+    pothole_masks: list,
+    pothole_detections: list,
+    result,
+) -> np.ndarray:
+    """Burn ALL inspection findings into one live-stream frame:
+
+    PASS/FAIL banner + key numbers on top, boundary + dimensions + defect
+    contours inside the ROI, dent/pothole overlays on the full frame.
+    """
+    out = frame.copy()
+    x, y, w, h = roi_rect
+
+    # ---- annotate inside the ROI ----
+    crop = out[y : y + h, x : x + w]
+    if boundary is not None:
+        crop = draw_dimensions(crop, boundary, mm_per_px)
+    if crack_components:
+        crop = draw_linear_defects(crop, crack_components, RED, "crack ")
+    if scratch_components:
+        crop = draw_linear_defects(crop, scratch_components, YELLOW, "scratch ")
+    out[y : y + h, x : x + w] = crop
+    cv2.rectangle(out, (x, y), (x + w, y + h), CYAN, 2)
+
+    # ---- full-frame overlays ----
+    if dent_mask is not None:
+        out = draw_mask_overlay(out, dent_mask, GREEN)
+    if pothole_masks:
+        out = draw_pothole_detections(out, pothole_masks, pothole_detections)
+
+    # ---- status banner ----
+    passed = bool(result.quality and result.quality.overall_pass)
+    banner_color = (60, 160, 40) if passed else (40, 40, 210)
+    frame_w = out.shape[1]
+    bar_h = 78
+
+    banner = out.copy()
+    cv2.rectangle(banner, (0, 0), (frame_w, bar_h), banner_color, -1)
+    out = cv2.addWeighted(banner, 0.8, out, 0.2, 0)
+
+    cv2.putText(out, "PASS" if passed else "FAIL", (12, 42),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.4, (255, 255, 255), 3)
+
+    defects = result.surface_defects
+    info = (
+        f"cracks:{len(defects.cracks)}  scratches:{len(defects.scratches)}  "
+        f"dents:{len(defects.dents)}  QR:{'Y' if result.ocr.qr_present else 'N'}  "
+        f"exp:{result.ocr.fields.expiry_date or '-'}"
+    )
+    dims = {m.name.rsplit("_", 1)[0]: f"{m.value}{m.unit}"
+            for m in result.dims_2d.measurements}
+    if "length" in dims and "width" in dims:
+        info = f"L:{dims['length']}  W:{dims['width']}  " + info
+    cv2.putText(out, info, (150, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                0.55, (255, 255, 255), 1, cv2.LINE_AA)
+
+    # First failure reason (if any) on the second banner line.
+    if result.quality and result.quality.failure_reasons:
+        reason = result.quality.failure_reasons[0]
+        if len(reason) > 90:
+            reason = reason[:87] + "..."
+        cv2.putText(out, reason, (150, 58), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+    return out

@@ -93,17 +93,21 @@ if mode == "Live (two phones)":
         "▶️ Run inspection now", type="primary", use_container_width=True
     )
 
-    try:
-        pair = client.latest_pair()
-    except Exception as exc:
-        pair = None
-        st.error(f"could not fetch frames: {exc}")
+    # In continuous mode the annotated result below IS the stream view, so
+    # the raw preview is only shown when continuous mode is off.
+    pair = None
+    if not continuous:
+        try:
+            pair = client.latest_pair()
+        except Exception as exc:
+            st.error(f"could not fetch frames: {exc}")
 
     if pair is None:
-        st.info(
-            "Waiting for two devices to stream… point both phone apps at "
-            f"`{backend_url}/upload`."
-        )
+        if not continuous:
+            st.info(
+                "Waiting for two devices to stream… point both phone apps at "
+                f"`{backend_url}/upload`."
+            )
     else:
         sync_icon = "🟢" if pair["synchronized"] else "🟠"
         st.caption(

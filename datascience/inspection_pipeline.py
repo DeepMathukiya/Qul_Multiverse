@@ -48,6 +48,7 @@ from datascience.overlays.drawing_overlays import (
     GREEN,
     RED,
     YELLOW,
+    compose_annotated_frame,
     draw_dimensions,
     draw_linear_defects,
     draw_mask_overlay,
@@ -161,6 +162,9 @@ def run_inspection(
                 )
 
     # ---------- 5. surface defects ----------
+    crack_components: list = []
+    scratch_components: list = []
+    dent_mask = None
     with timer.stage("surface_defects"):
         defects = SurfaceDefectResult()
         try:
@@ -233,6 +237,24 @@ def run_inspection(
             result.pothole,
         )
         result.quality = build_decision(checks)
+
+    # ---------- 8. single annotated stream frame ----------
+    # Everything burned into one image so the dashboard can show the live
+    # stream itself instead of separate report images.
+    with timer.stage("annotate"):
+        annotated = compose_annotated_frame(
+            vertical_rect,
+            roi_rect,
+            boundary,
+            result.dims_2d.mm_per_px,
+            crack_components,
+            scratch_components,
+            dent_mask,
+            pothole_masks,
+            result.pothole.detections,
+            result,
+        )
+        result.images["annotated"] = encode_image_b64(annotated)
 
     result.timings_ms = timer.timings_ms
     result.total_time_ms = timer.total_ms
