@@ -44,9 +44,9 @@ with st.sidebar:
     mode = st.radio("Acquisition mode", ["Live (two phones)", "Upload images"])
 
     ocr_on = st.toggle(
-        "🔤 OCR (Sarvam) enabled",
+        "🔤 OCR (Qwen3-VL) enabled",
         value=True,
-        help="Off = skip the slow OCR API call; QR decoding still runs.",
+        help="Off = skip OCR field extraction; QR decoding still runs.",
     )
 
 # ---------------- live mode ----------------

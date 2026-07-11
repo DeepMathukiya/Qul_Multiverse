@@ -1,4 +1,4 @@
-"""Run the full OCR inspection: Sarvam text + parsing + QR + validation."""
+"""Run the full OCR inspection: Qwen3-VL extraction + QR + validation."""
 
 from __future__ import annotations
 
@@ -7,13 +7,14 @@ import numpy as np
 from datascience.config_loader import load_product_specs, load_system_config
 from datascience.schemas import CheckStatus, OcrResult
 
-from datascience.ocr.field_parsing import is_expiry_valid, parse_fields
+from datascience.ocr.field_parsing import is_expiry_valid
 from datascience.ocr.qr_decoding import decode_qr
-from datascience.ocr.sarvam_client import extract_text
+from datascience.ocr.qwen_ocr_client import extract_product_info
 
 
 def inspect_product_info(
-    image: np.ndarray,
+    vertical: np.ndarray,
+    horizontal: np.ndarray,
     enabled_override: bool | None = None,
 ) -> OcrResult:
     """Full OCR inspection. enabled_override (from the API request) wins
@@ -24,7 +25,7 @@ def inspect_product_info(
     rules = load_product_specs().get("ocr_rules", {})
 
     # QR decoding is local and independent of the OCR provider.
-    qr_data = decode_qr(image)
+    qr_data = decode_qr(vertical)
     result.qr_present = qr_data is not None
     result.qr_data = qr_data
 
@@ -38,14 +39,12 @@ def inspect_product_info(
         result.error = "OCR turned off for this inspection"
         return result
 
-    text, error = extract_text(image)
-    result.raw_text = text
+    result.fields, result.raw_text, error = extract_product_info(vertical, horizontal)
     if error:
         result.status = CheckStatus.NOT_AVAILABLE
         result.error = error
         return result
 
-    result.fields = parse_fields(text)
     result.expiry_valid = is_expiry_valid(result.fields.expiry_date)
 
     required = rules.get("required_fields", [])

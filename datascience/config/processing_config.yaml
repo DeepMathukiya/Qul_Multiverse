@@ -27,14 +27,18 @@ preprocessing:
 
 ocr:
   enabled: true
-  provider: "sarvam"
-  language: "en-IN"
-  # The API key comes from the SARVAM_API_KEY environment variable, loaded
-  # from datascience/.env (see datascience/.env.example). An api_key value
-  # here is only a last-resort fallback — prefer the .env file.
-  api_key_env: "SARVAM_API_KEY"
+
+# Qwen3-VL-4B-Instruct served locally via Qualcomm GenieX's OpenAI-compatible
+# server (`geniex serve`, default http://127.0.0.1:18181/v1). Used for OCR
+# field extraction and pothole detection. base_url/model/api_key can be
+# overridden via datascience/.env (GENIEX_BASE_URL/GENIEX_MODEL/GENIEX_API_KEY).
+vlm:
+  base_url: "http://127.0.0.1:18181/v1"
+  model: "ai-hub-models/Qwen3-VL-4B-Instruct"
   api_key: null
   timeout_sec: 90
+  max_tokens: 800
+  temperature: 0.1
 
 stereo:
   # StereoSGBM parameters (tuned post-baseline)
@@ -50,9 +54,4 @@ surface_defects:
   dent_depth_threshold_mm: 0.5
 
 pothole:
-  enabled: true
-  weights_path: "models/pothole_yolov8_seg.pt"   # relative to datascience/
-  confidence: 0.4
-  # severity by mask area as fraction of image: > high_ratio -> high, etc.
-  severity_medium_ratio: 0.02
-  severity_high_ratio: 0.08
+  enabled: true   # detection runs through the same Qwen3-VL (GenieX) call as OCR

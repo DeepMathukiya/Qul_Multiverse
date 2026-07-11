@@ -1,87 +1,65 @@
-"""Geometric metrics computed from YOLO pothole segmentation masks."""
+"""Qwen3-VL-based pothole detection (replaces YOLO segmentation).
+
+No pixel mask is available from a VLM, so detections carry only a
+qualitative severity + description — no geometry, no overlay image.
+"""
 
 from __future__ import annotations
 
-import cv2
 import numpy as np
 
 from datascience.config_loader import load_system_config
 from datascience.schemas import CheckStatus, PotholeDetection, PotholeResult
+from datascience.vlm.geniex_client import call_vlm
+from datascience.vlm.prompts import pothole_prompt
+from datascience.vlm.response_json import parse_json_response
 
-from datascience.calibration.scale_reference import get_scale
-from datascience.pothole.yolo_pothole_segmentation import segment_potholes
-
-
-def _severity(area_ratio: float, cfg: dict) -> str:
-    if area_ratio >= float(cfg.get("severity_high_ratio", 0.08)):
-        return "high"
-    if area_ratio >= float(cfg.get("severity_medium_ratio", 0.02)):
-        return "medium"
-    return "low"
+_VALID_SEVERITIES = {"low", "medium", "high"}
 
 
-def analyze_potholes(image: np.ndarray) -> tuple[PotholeResult, list[np.ndarray]]:
-    """Run YOLO pothole segmentation and compute metrics per detection.
+def analyze_potholes(
+    vertical: np.ndarray, horizontal: np.ndarray
+) -> tuple[PotholeResult, list[np.ndarray]]:
+    """Run Qwen3-VL pothole detection.
 
-    Real-world (mm) values are attached only when a valid scale exists —
-    otherwise metrics stay in pixels (spec: no pixel==mm assumption).
-    Returns (result, masks) — masks for overlay drawing.
+    Returns (result, masks) — masks is always empty (no pixel mask from a
+    VLM); kept in the return signature so the pipeline's existing
+    overlay-drawing guard (`if masks:`) still works unchanged.
     """
     cfg = load_system_config().get("pothole", {})
     result = PotholeResult(enabled=bool(cfg.get("enabled", True)))
 
     if not result.enabled:
         result.status = CheckStatus.SKIPPED
-        result.note = "pothole analysis disabled in system_config.yaml"
+        result.note = "pothole analysis disabled in processing_config.yaml"
         return result, []
 
-    detections_raw, error = segment_potholes(image)
+    text, error = call_vlm([vertical, horizontal], pothole_prompt())
     if error:
         result.status = CheckStatus.NOT_AVAILABLE
         result.error = error
         return result, []
 
-    mm_per_px, scale_source = get_scale()
-    frame_area = float(image.shape[0] * image.shape[1])
-    unit = "mm" if mm_per_px else "px"
-    k = mm_per_px if mm_per_px else 1.0
+    data = parse_json_response(text)
+    if not isinstance(data, list):
+        result.status = CheckStatus.NOT_AVAILABLE
+        result.error = "VLM did not return a valid JSON array"
+        return result, []
 
-    masks: list[np.ndarray] = []
-    for det in detections_raw:
-        mask = det["mask"]
-        area_px = float(cv2.countNonZero(mask))
-        if area_px < 10:
+    for item in data:
+        if not isinstance(item, dict):
             continue
-
-        contours, _ = cv2.findContours(
-            mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-        if not contours:
-            continue
-        largest = max(contours, key=cv2.contourArea)
-        perimeter_px = float(cv2.arcLength(largest, True))
-
-        # Max width = longer side of the minimum-area rectangle.
-        (_, _), (rw, rh), _ = cv2.minAreaRect(largest)
-        max_width_px = float(max(rw, rh))
-
+        severity = str(item.get("severity", "low")).lower()
+        if severity not in _VALID_SEVERITIES:
+            severity = "low"
         result.detections.append(
             PotholeDetection(
-                confidence=round(det["confidence"], 3),
-                bbox_xyxy=[round(v, 1) for v in det["bbox_xyxy"]],
-                area=round(area_px * k * k, 1),
-                perimeter=round(perimeter_px * k, 1),
-                max_width=round(max_width_px * k, 1),
-                unit=unit,
-                severity=_severity(area_px / frame_area, cfg),
+                severity=severity,
+                description=item.get("description") or None,
             )
         )
-        masks.append(mask)
 
     result.present = len(result.detections) > 0
     result.status = CheckStatus.PASS
-    if mm_per_px is None:
-        result.note = "metrics in pixels — no calibration/scale for real-world units"
-    else:
-        result.note = f"real-world units via {scale_source} scale"
-    return result, masks
+    result.note = "qwen3-vl qualitative detection — no calibrated geometry"
+    return result, []

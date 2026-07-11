@@ -34,7 +34,7 @@ class OcrFields(BaseModel):
 
 class OcrResult(BaseModel):
     status: CheckStatus = CheckStatus.NOT_AVAILABLE
-    provider: str = "sarvam"
+    provider: str = "qwen3-vl"
     raw_text: str = ""
     fields: OcrFields = Field(default_factory=OcrFields)
     qr_present: bool = False
@@ -119,13 +119,14 @@ class SurfaceDefectResult(BaseModel):
 # --------------------------------------------------
 
 class PotholeDetection(BaseModel):
-    confidence: float
-    bbox_xyxy: list[float]
-    area: float
-    perimeter: float
-    max_width: float
+    confidence: Optional[float] = None
+    bbox_xyxy: Optional[list[float]] = None
+    area: Optional[float] = None
+    perimeter: Optional[float] = None
+    max_width: Optional[float] = None
     unit: str = "px"
     severity: str = "low"  # low | medium | high
+    description: Optional[str] = None
 
 
 class PotholeResult(BaseModel):

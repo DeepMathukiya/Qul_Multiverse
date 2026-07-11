@@ -12,7 +12,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 
 # Load datascience/.env before anything reads the environment
-# (SARVAM_API_KEY, DATASCIENCE_HOST/PORT, optional overrides).
+# (GENIEX_BASE_URL/GENIEX_MODEL/GENIEX_API_KEY, DATASCIENCE_HOST/PORT,
+# optional overrides).
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 from datascience.routes.process_routes import router as process_router  # noqa: E402
@@ -20,8 +21,9 @@ from datascience.routes.process_routes import router as process_router  # noqa: 
 app = FastAPI(
     title="QA Datascience Service",
     description=(
-        "Computer-vision quality analysis: preprocessing, OCR (Sarvam), 2D "
-        "dimensions, stereo 3D, surface defects, YOLO pothole segmentation "
+        "Computer-vision quality analysis: preprocessing, OCR and pothole "
+        "detection via Qwen3-VL-4B-Instruct (Qualcomm GenieX, local NPU "
+        "inference), classical-CV 2D dimensions, stereo 3D, surface defects "
         "and quality-rule evaluation."
     ),
 )

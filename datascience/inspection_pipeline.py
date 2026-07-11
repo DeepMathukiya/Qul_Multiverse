@@ -5,12 +5,13 @@ datascience layer.
 
 Stages:
 1. preprocessing (undistort -> rectify when calibrated, denoise, ROI crop)
-2. OCR + QR (Sarvam, runs in a worker thread — slowest stage)
+2. OCR (Qwen3-VL via GenieX) + local QR decode, and pothole detection
+   (Qwen3-VL via GenieX) — run sequentially in one worker thread since both
+   share a single local NPU-hosted model (slowest stage)
 3. 2D dimensions (classical CV in the known ROI)
 4. stereo disparity -> depth -> 3D measurements (calibration required)
 5. crack/scratch (classical CV) + dent (stereo depth)
-6. YOLO pothole segmentation
-7. quality rules -> explainable PASS/FAIL
+6. quality rules -> explainable PASS/FAIL
 
 CLI smoke test:
     python -m datascience.inspection_pipeline --vertical bottle-dent.png --horizontal bottle-dent.png
@@ -31,6 +32,7 @@ from datascience.schemas import (
     Dim3DResult,
     InspectionResult,
     OcrResult,
+    PotholeResult,
     SurfaceDefectResult,
 )
 from datascience.timing import StageTimer
@@ -105,16 +107,27 @@ def run_inspection(
     result.images["horizontal"] = encode_image_b64(horizontal_rect)
     result.images["roi"] = encode_image_b64(draw_roi(vertical_rect, roi_rect))
 
-    # ---------- 2. OCR in a worker thread (network-bound, slowest) ----------
+    # ---------- 2. OCR + pothole (Qwen3-VL via GenieX) in a worker thread --
+    # Both calls hit the same local NPU-hosted model, so they run
+    # sequentially inside one background thread (avoids two concurrent
+    # generation requests against one local server) while still overlapping
+    # with the classical CV stages below running on the main thread.
     ocr_holder: dict[str, OcrResult] = {}
+    pothole_holder: dict[str, object] = {}
 
-    def _ocr_worker() -> None:
+    def _vlm_worker() -> None:
         t0 = __import__("time").perf_counter()
-        ocr_holder["result"] = inspect_product_info(vertical_rect, ocr_enabled)
-        ocr_holder["ms"] = ( __import__("time").perf_counter() - t0) * 1000.0
+        ocr_holder["result"] = inspect_product_info(vertical_rect, horizontal_rect, ocr_enabled)
+        t1 = __import__("time").perf_counter()
+        ocr_holder["ms"] = (t1 - t0) * 1000.0
 
-    ocr_thread = threading.Thread(target=_ocr_worker, daemon=True)
-    ocr_thread.start()
+        pothole_result, pothole_masks = analyze_potholes(vertical_rect, horizontal_rect)
+        pothole_holder["result"] = pothole_result
+        pothole_holder["masks"] = pothole_masks
+        pothole_holder["ms"] = (__import__("time").perf_counter() - t1) * 1000.0
+
+    vlm_thread = threading.Thread(target=_vlm_worker, daemon=True)
+    vlm_thread.start()
 
     # ---------- 3. 2D dimensions ----------
     with timer.stage("dimensions_2d"):
@@ -209,21 +222,20 @@ def run_inspection(
             defects.error = f"surface defect analysis failed: {exc}"
         result.surface_defects = defects
 
-    # ---------- 6. pothole (YOLO segmentation only) ----------
-    with timer.stage("pothole"):
-        pothole_result, pothole_masks = analyze_potholes(vertical_rect)
-        result.pothole = pothole_result
-        if pothole_masks:
-            result.images["pothole"] = encode_image_b64(
-                draw_pothole_detections(vertical_rect, pothole_masks, pothole_result.detections)
-            )
-
-    # ---------- wait for OCR ----------
-    ocr_thread.join()
+    # ---------- wait for OCR + pothole (Qwen3-VL) ----------
+    vlm_thread.join()
     result.ocr = ocr_holder.get("result", OcrResult())
     timer.record("ocr", float(ocr_holder.get("ms", 0.0)))
 
-    # ---------- 7. quality rules -> decision ----------
+    result.pothole = pothole_holder.get("result", PotholeResult())
+    pothole_masks = pothole_holder.get("masks", [])
+    timer.record("pothole", float(pothole_holder.get("ms", 0.0)))
+    if pothole_masks:
+        result.images["pothole"] = encode_image_b64(
+            draw_pothole_detections(vertical_rect, pothole_masks, result.pothole.detections)
+        )
+
+    # ---------- 6. quality rules -> decision ----------
     with timer.stage("quality_rules"):
         checks = evaluate_quality_rules(
             result.ocr,

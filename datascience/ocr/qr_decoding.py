@@ -1,4 +1,4 @@
-"""Local QR code detection and decoding (Sarvam is not used for QR)."""
+"""Local QR code detection and decoding (independent of the OCR provider)."""
 
 from __future__ import annotations
 

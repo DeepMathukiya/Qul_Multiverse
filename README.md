@@ -1,8 +1,10 @@
 # Computer-Vision Quality Analysis System
 
 End-to-end product quality inspection using **two mobile cameras as a stereo
-rig**. Combines OCR, classical computer vision, stereo 3D measurement and
-YOLO segmentation into one explainable **PASS / FAIL** decision shown on a
+rig**. Combines classical computer vision (2D dimensions, stereo 3D
+measurement, crack/scratch/dent detection) with **Qwen3-VL-4B-Instruct**
+(served locally via Qualcomm GenieX, on-NPU) for OCR field extraction and
+pothole detection, into one explainable **PASS / FAIL** decision shown on a
 Streamlit dashboard.
 
 ```
@@ -12,8 +14,8 @@ Two Android phones (QC_Hackathon.apk)
 ┌───────────────────┐   pair V/H     ┌────────────────────────────┐
 │  backend :5000    │ ────────────► │  datascience :8100         │
 │  (FastAPI)        │  POST /process│  (FastAPI)                 │
-│  upload / pairing │ ◄──────────── │  OCR · 2D dims · stereo 3D │
-│  orchestration    │  result JSON  │  defects · pothole · rules │
+│  upload / pairing │ ◄──────────── │  Qwen3-VL OCR+pothole ·    │
+│  orchestration    │  result JSON  │  2D/3D dims · defects · rules │
 └───────────────────┘               └────────────────────────────┘
         ▲  REST
         │
@@ -77,19 +79,19 @@ datascience/              FastAPI processing service (port 8100)
   main.py                   entry point
   inspection_pipeline.py    orchestrates all stages (also a CLI)
   config/
-    processing_config.yaml  ROI, scale, OCR, stereo, defect, pothole settings
+    processing_config.yaml  ROI, scale, GenieX/VLM endpoint, stereo, defect settings
     product_specs.yaml      dimensions/tolerances + quality rules
     calibration/            saved calibration .npz files
   preprocessing/            resize, denoise, ROI, undistort, rectify
   calibration/              chessboard + stereo calibration scripts
-  ocr/                      Sarvam AI OCR, field parsing, QR, validation
+  vlm/                      shared GenieX client, prompts, JSON parsing
+  ocr/                      Qwen3-VL field extraction, QR decode, expiry validation
   dimensions_2d/            boundary extraction, geometric fitting, measures
   dimensions_3d/            disparity, depth reconstruction, 3D measures
   surface_defects/          crack / scratch (classical CV), dent (stereo)
-  pothole/                  YOLO segmentation + metrics (potholes ONLY)
+  pothole/                  Qwen3-VL qualitative detection (potholes ONLY)
   quality/                  rule engine + explainable decision
   overlays/                 dashboard overlay rendering
-  models/                   put pothole_yolov8_seg.pt here
 
 start_all_services.py     one-command coordinator (starts + monitors all 3)
 ```
@@ -98,9 +100,10 @@ start_all_services.py     one-command coordinator (starts + monitors all 3)
 
 1. **Preprocessing** — resize, denoise, illumination normalization,
    undistortion + stereo rectification (when calibrated), configured ROI crop.
-2. **OCR** (Sarvam AI Document Intelligence) — expiry date, manufacturing
-   date, serial number, batch number, product ID + local QR decoding.
-   Runs in parallel with the CV stages.
+2. **OCR** (Qwen3-VL-4B-Instruct via Qualcomm GenieX, local NPU inference) —
+   expiry date, manufacturing date, serial number, batch number, product ID
+   + local QR decoding (deterministic, always runs). Runs in a background
+   thread alongside the CV stages.
 3. **2D dimensions** (classical CV only — no ML): threshold + Canny/Sobel +
    morphology + contours → length, width, diameter, radius, hole diameters,
    hole spacing, angles, area, perimeter, roundness.
@@ -109,8 +112,11 @@ start_all_services.py     one-command coordinator (starts + monitors all 3)
 5. **Surface defects** (classical CV): cracks (length, max/avg width, area,
    orientation, branches), scratches (length, width, area, orientation),
    dents from stereo depth (area, diameter, max depth, deformation).
-6. **Pothole** — YOLO segmentation (only used for potholes): mask, bbox,
-   confidence, area, perimeter, max width, severity.
+6. **Pothole** — Qwen3-VL-4B-Instruct (same GenieX call path as OCR, runs
+   sequentially after it in the same background thread): qualitative
+   presence, severity (low/medium/high) and a short description per
+   detection. No pixel mask or geometry (bbox/area/perimeter) — a VLM can't
+   ground precise coordinates the way the previous YOLO segmentation did.
 7. **Quality rules** — every configured rule becomes a check with measured
    value, expected range and reason → explainable PASS/FAIL.
 
@@ -141,7 +147,7 @@ Each layer loads its **own** `.env` file via `python-dotenv` — copy the
 | Layer | File | Key variables |
 |---|---|---|
 | backend | `backend/.env.example` | `BACKEND_HOST/PORT`, `DATASCIENCE_URL`, `VERTICAL/HORIZONTAL_DEVICE_ID`, `CONTINUOUS_ENABLED`, `CONTINUOUS_INTERVAL_SEC` |
-| datascience | `datascience/.env.example` | `SARVAM_API_KEY` (required for OCR), `DATASCIENCE_HOST/PORT`, `POTHOLE_WEIGHTS_PATH`, `MM_PER_PX` |
+| datascience | `datascience/.env.example` | `GENIEX_BASE_URL`/`GENIEX_MODEL`/`GENIEX_API_KEY` (required for OCR + pothole), `DATASCIENCE_HOST/PORT`, `MM_PER_PX` |
 | frontend | `frontend/.env.example` | `BACKEND_URL` |
 
 ## Configuration
@@ -149,7 +155,7 @@ Each layer loads its **own** `.env` file via `python-dotenv` — copy the
 | File | What you edit there |
 |---|---|
 | `backend/config.yaml` | ports, phone device-id → vertical/horizontal mapping, pair tolerance, continuous mode |
-| `datascience/config/processing_config.yaml` | ROI box, mm/px scale, OCR key/language, stereo params, defect thresholds, YOLO weights path |
+| `datascience/config/processing_config.yaml` | ROI box, mm/px scale, GenieX base URL/model/timeout for OCR+pothole, stereo params, defect thresholds |
 | `datascience/config/product_specs.yaml` | expected dimensions + tolerances, required OCR fields, crack/scratch/dent limits — the whole quality rulebook |
 
 Quality rules are pure data — tune tolerances without touching code.
@@ -170,26 +176,41 @@ measurements and dent-depth checks activate. For 2D-only real units without
 full calibration, measure a reference object once and set `scale.mm_per_px`
 in `processing_config.yaml`.
 
-## Enabling pothole detection
+## OCR & pothole detection (Qwen3-VL via GenieX)
 
-Place YOLOv8 segmentation weights trained for potholes at
-`datascience/models/pothole_yolov8_seg.pt` (or change
-`pothole.weights_path`). Until then the pothole section reports
-`NOT_AVAILABLE` without affecting the rest of the system.
+Both stages call the same locally-hosted **Qwen3-VL-4B-Instruct** model
+through Qualcomm **GenieX**'s OpenAI-compatible server, running on-NPU
+(tested target: Snapdragon X Elite). Setup (commands sourced from Qualcomm's
+GenieX documentation — verify against your installed GenieX version):
 
-## OCR (Sarvam AI)
+```bash
+# 1. install GenieX (Windows ARM64 installer), then open a new terminal
+# 2. pull the pre-compiled NPU bundle
+geniex pull ai-hub-models/Qwen3-VL-4B-Instruct
+# 3. start the local OpenAI-compatible server (default http://127.0.0.1:18181/v1)
+geniex serve
+```
 
-OCR uses the Sarvam Document Intelligence job API. Put the key in
-`datascience/.env` as `SARVAM_API_KEY` (see `datascience/.env.example`).
-If it is missing, OCR reports `NOT_AVAILABLE` and the rest of the
-inspection still runs.
+Point `datascience/.env` at it (see `datascience/.env.example`):
+`GENIEX_BASE_URL`, `GENIEX_MODEL`, `GENIEX_API_KEY`. If GenieX isn't
+reachable, OCR and pothole detection report `NOT_AVAILABLE` with an error
+note — the rest of the inspection (2D dims, stereo 3D, surface defects)
+still runs normally, since those stay classical CV and don't depend on it.
+
+Pothole detection reports qualitative severity (low/medium/high) + a short
+description per finding — no pixel mask or geometry, since a VLM can't
+ground precise bounding boxes/contours the way the previous YOLO
+segmentation did.
 
 ## Troubleshooting
 
 - **"need two streaming devices"** — both phones must have posted at least
   one frame to `/upload`; check they target the PC's LAN IP, port 5000.
-- **Slow first pothole call** — YOLO loads lazily on the first inspection.
 - **`ximgproc` missing** — install `opencv-contrib-python`
   (not plain `opencv-python`); it provides skeleton thinning + WLS filtering.
 - **Windows firewall** — allow inbound port 5000 so the phones can reach
   the backend.
+- **GenieX server not reachable** — verify `geniex serve` is running and
+  `GENIEX_BASE_URL` in `datascience/.env` matches its printed address; OCR
+  and pothole detection return `NOT_AVAILABLE` with an error note instead of
+  crashing `/process`.

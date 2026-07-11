@@ -18,8 +18,8 @@ PROJECT_ROOT = PACKAGE_ROOT.parent
 CONFIG_DIR = PACKAGE_ROOT / "config"
 
 # Environment variables from datascience/.env (real environment wins over
-# file). Loaded at import time so the CLI pipeline and Sarvam client see the
-# variables too.
+# file). Loaded at import time so the CLI pipeline and the GenieX VLM client
+# see the variables too.
 load_dotenv(PACKAGE_ROOT / ".env")
 
 
@@ -29,11 +29,13 @@ def load_system_config() -> dict:
         config = yaml.safe_load(f)
 
     # Environment variables override processing_config.yaml values.
-    # (SARVAM_API_KEY is read directly from the environment by the OCR
-    # client; load_dotenv above makes it available.)
-    pothole = config.setdefault("pothole", {})
-    if os.environ.get("POTHOLE_WEIGHTS_PATH"):
-        pothole["weights_path"] = os.environ["POTHOLE_WEIGHTS_PATH"]
+    vlm = config.setdefault("vlm", {})
+    if os.environ.get("GENIEX_BASE_URL"):
+        vlm["base_url"] = os.environ["GENIEX_BASE_URL"]
+    if os.environ.get("GENIEX_MODEL"):
+        vlm["model"] = os.environ["GENIEX_MODEL"]
+    if os.environ.get("GENIEX_API_KEY"):
+        vlm["api_key"] = os.environ["GENIEX_API_KEY"]
 
     scale = config.setdefault("scale", {}) or {}
     if os.environ.get("MM_PER_PX"):
