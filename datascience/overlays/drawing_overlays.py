@@ -7,12 +7,22 @@ import numpy as np
 
 from datascience.dimensions_2d.boundary_extraction import BoundaryResult
 from datascience.dimensions_2d.geometric_fitting import fit_min_area_rect
-from datascience.surface_defects.defect_filtering import LinearComponent
 
 GREEN = (0, 220, 0)
 RED = (0, 0, 230)
 YELLOW = (0, 220, 220)
 CYAN = (230, 200, 0)
+ORANGE = (0, 140, 255)
+MAGENTA = (200, 0, 200)
+
+# One color per YOLO defect class (BGR). Unknown labels fall back to RED.
+DEFECT_COLORS = {
+    "Crack": RED,
+    "Dent": ORANGE,
+    "Missing-head": MAGENTA,
+    "Paint-off": YELLOW,
+    "Scratch": CYAN,
+}
 
 
 def draw_roi(image: np.ndarray, roi_rect: tuple[int, int, int, int]) -> np.ndarray:
@@ -52,22 +62,15 @@ def draw_dimensions(
     return out
 
 
-def draw_linear_defects(
-    roi_image: np.ndarray,
-    components: list[LinearComponent],
-    color: tuple[int, int, int],
-    label: str,
-) -> np.ndarray:
-    out = roi_image.copy()
-    for i, comp in enumerate(components, start=1):
-        contours, _ = cv2.findContours(
-            comp.mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-        cv2.drawContours(out, contours, -1, color, 2)
-        ys, xs = np.nonzero(comp.mask)
-        if len(xs):
-            cv2.putText(out, f"{label}{i}", (int(xs.min()), max(int(ys.min()) - 6, 12)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+def draw_defect_boxes(image: np.ndarray, detections: list) -> np.ndarray:
+    """Draw YOLO defect bounding boxes (color-coded per class) with labels."""
+    out = image.copy()
+    for det in detections:
+        color = DEFECT_COLORS.get(det.label, RED)
+        x1, y1, x2, y2 = (int(v) for v in det.bbox_xyxy)
+        cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
+        cv2.putText(out, f"{det.label} {det.confidence:.2f}",
+                    (x1, max(y1 - 6, 14)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
     return out
 
 
@@ -104,17 +107,15 @@ def compose_annotated_frame(
     roi_rect: tuple[int, int, int, int],
     boundary,
     mm_per_px: float | None,
-    crack_components: list,
-    scratch_components: list,
-    dent_mask: np.ndarray | None,
+    defect_detections: list,
     pothole_masks: list,
     pothole_detections: list,
     result,
 ) -> np.ndarray:
     """Burn ALL inspection findings into one live-stream frame:
 
-    PASS/FAIL banner + key numbers on top, boundary + dimensions + defect
-    contours inside the ROI, dent/pothole overlays on the full frame.
+    PASS/FAIL banner + key numbers on top, boundary + dimensions inside the
+    ROI, YOLO defect boxes + pothole overlays on the full frame.
     """
     out = frame.copy()
     x, y, w, h = roi_rect
@@ -123,16 +124,12 @@ def compose_annotated_frame(
     crop = out[y : y + h, x : x + w]
     if boundary is not None:
         crop = draw_dimensions(crop, boundary, mm_per_px)
-    if crack_components:
-        crop = draw_linear_defects(crop, crack_components, RED, "crack ")
-    if scratch_components:
-        crop = draw_linear_defects(crop, scratch_components, YELLOW, "scratch ")
     out[y : y + h, x : x + w] = crop
     cv2.rectangle(out, (x, y), (x + w, y + h), CYAN, 2)
 
-    # ---- full-frame overlays ----
-    if dent_mask is not None:
-        out = draw_mask_overlay(out, dent_mask, GREEN)
+    # ---- full-frame overlays (YOLO boxes are in full-frame coords) ----
+    if defect_detections:
+        out = draw_defect_boxes(out, defect_detections)
     if pothole_masks:
         out = draw_pothole_detections(out, pothole_masks, pothole_detections)
 
@@ -150,9 +147,12 @@ def compose_annotated_frame(
                 cv2.FONT_HERSHEY_SIMPLEX, 1.4, (255, 255, 255), 3)
 
     defects = result.surface_defects
+    if defects.counts:
+        defect_str = " ".join(f"{lbl}:{n}" for lbl, n in defects.counts.items())
+    else:
+        defect_str = f"{len(defects.detections)} found" if defects.present else "none"
     info = (
-        f"cracks:{len(defects.cracks)}  scratches:{len(defects.scratches)}  "
-        f"dents:{len(defects.dents)}  QR:{'Y' if result.ocr.qr_present else 'N'}  "
+        f"defects[{defect_str}]  QR:{'Y' if result.ocr.qr_present else 'N'}  "
         f"exp:{result.ocr.fields.expiry_date or '-'}"
     )
     dims = {m.name.rsplit("_", 1)[0]: f"{m.value}{m.unit}"

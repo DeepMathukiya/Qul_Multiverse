@@ -8,7 +8,7 @@ Stages:
 2. OCR + QR (Sarvam, runs in a worker thread — slowest stage)
 3. 2D dimensions (classical CV in the known ROI)
 4. stereo disparity -> depth -> 3D measurements (calibration required)
-5. crack/scratch (classical CV) + dent (stereo depth)
+5. surface defects (YOLO detection: crack/dent/missing-head/paint-off/scratch)
 6. YOLO pothole segmentation
 7. quality rules -> explainable PASS/FAIL
 
@@ -45,22 +45,15 @@ from datascience.dimensions_3d.disparity import compute_disparity
 from datascience.dimensions_3d.measurements_3d import measure_product_3d
 from datascience.ocr.ocr_validation import inspect_product_info
 from datascience.overlays.drawing_overlays import (
-    GREEN,
-    RED,
-    YELLOW,
     compose_annotated_frame,
+    draw_defect_boxes,
     draw_dimensions,
-    draw_linear_defects,
-    draw_mask_overlay,
     draw_pothole_detections,
     draw_roi,
 )
 from datascience.pothole.pothole_metrics import analyze_potholes
 from datascience.preprocessing.distortion_correction import undistort
-from datascience.preprocessing.image_preprocessing import (
-    preprocess_frame,
-    preprocess_gray,
-)
+from datascience.preprocessing.image_preprocessing import preprocess_frame
 from datascience.preprocessing.roi_extraction import extract_roi
 from datascience.preprocessing.stereo_rectification import (
     load_stereo_calibration,
@@ -68,9 +61,7 @@ from datascience.preprocessing.stereo_rectification import (
 )
 from datascience.quality.decision_report import build_decision
 from datascience.quality.quality_rules import evaluate_quality_rules
-from datascience.surface_defects.crack_detection import detect_cracks
-from datascience.surface_defects.dent_detection import detect_dents
-from datascience.surface_defects.scratch_detection import detect_scratches
+from datascience.surface_defects.defect_metrics import analyze_surface_defects
 
 
 def run_inspection(
@@ -100,7 +91,6 @@ def run_inspection(
             vertical_rect, horizontal_rect = vertical_img, horizontal_img
 
         roi_bgr, roi_rect = extract_roi(vertical_rect)
-        roi_gray = preprocess_gray(roi_bgr)
 
     result.images["vertical"] = encode_image_b64(vertical_rect)
     result.images["horizontal"] = encode_image_b64(horizontal_rect)
@@ -161,57 +151,22 @@ def run_inspection(
                     error=f"stereo processing failed: {exc}",
                 )
 
-    # ---------- 5. surface defects ----------
-    crack_components: list = []
-    scratch_components: list = []
-    dent_mask = None
+    # ---------- 5. surface defects (YOLO detection, all classes) ----------
+    defect_detections: list = []
     with timer.stage("surface_defects"):
-        defects = SurfaceDefectResult()
         try:
-            product_mask = boundary.mask if boundary is not None else None
-
-            crack_metrics, crack_components = detect_cracks(roi_gray, product_mask)
-            defects.cracks = crack_metrics
-
-            crack_mask = np.zeros_like(roi_gray)
-            for comp in crack_components:
-                crack_mask = cv2.bitwise_or(crack_mask, comp.mask)
-
-            scratch_metrics, scratch_components = detect_scratches(
-                roi_gray, product_mask, exclude_mask=crack_mask
+            result.surface_defects, defect_detections = analyze_surface_defects(
+                vertical_rect
             )
-            defects.scratches = scratch_metrics
-
-            if crack_components:
-                result.images["crack"] = encode_image_b64(
-                    draw_linear_defects(roi_bgr, crack_components, RED, "crack ")
+            if defect_detections:
+                result.images["defects"] = encode_image_b64(
+                    draw_defect_boxes(vertical_rect, defect_detections)
                 )
-            if scratch_components:
-                result.images["scratch"] = encode_image_b64(
-                    draw_linear_defects(roi_bgr, scratch_components, YELLOW, "scratch ")
-                )
-
-            if depth_data is not None:
-                x, y, w, h = roi_rect
-                full_mask = np.zeros(vertical_rect.shape[:2], dtype=np.uint8)
-                if boundary is not None:
-                    full_mask[y : y + h, x : x + w] = boundary.mask
-                else:
-                    full_mask[y : y + h, x : x + w] = 255
-                dent_metrics, dent_mask = detect_dents(depth_data, full_mask)
-                defects.dents = dent_metrics
-                if dent_mask is not None:
-                    result.images["dent"] = encode_image_b64(
-                        draw_mask_overlay(vertical_rect, dent_mask, GREEN)
-                    )
-            else:
-                defects.dent_note = "dent depth needs stereo calibration"
-
-            defects.status = CheckStatus.PASS
         except Exception as exc:
-            defects.status = CheckStatus.NOT_AVAILABLE
-            defects.error = f"surface defect analysis failed: {exc}"
-        result.surface_defects = defects
+            result.surface_defects = SurfaceDefectResult(
+                status=CheckStatus.NOT_AVAILABLE,
+                error=f"surface defect analysis failed: {exc}",
+            )
 
     # ---------- 6. pothole (YOLO segmentation only) ----------
     with timer.stage("pothole"):
@@ -238,27 +193,53 @@ def run_inspection(
         )
         result.quality = build_decision(checks)
 
-    # ---------- 8. single annotated stream frame ----------
-    # Everything burned into one image so the dashboard can show the live
-    # stream itself instead of separate report images.
+    # ---------- 8. annotated stream frames (BOTH cameras) ----------
+    # Each camera's frame gets all findings burned in, so the dashboard shows
+    # the two processed live streams and nothing else. The vertical frame
+    # carries the primary detections; the horizontal frame is detected
+    # independently for display (both are "processed streams").
     with timer.stage("annotate"):
-        annotated = compose_annotated_frame(
+        annotated_vertical = compose_annotated_frame(
             vertical_rect,
             roi_rect,
             boundary,
             result.dims_2d.mm_per_px,
-            crack_components,
-            scratch_components,
-            dent_mask,
+            defect_detections,
             pothole_masks,
             result.pothole.detections,
             result,
         )
-        result.images["annotated"] = encode_image_b64(annotated)
+        result.images["annotated_vertical"] = encode_image_b64(annotated_vertical)
+
+        annotated_horizontal = _annotate_secondary_frame(horizontal_rect, result)
+        result.images["annotated_horizontal"] = encode_image_b64(annotated_horizontal)
 
     result.timings_ms = timer.timings_ms
     result.total_time_ms = timer.total_ms
     return result
+
+
+def _annotate_secondary_frame(frame_rect: np.ndarray, result: InspectionResult) -> np.ndarray:
+    """Run independent 2D boundary + YOLO defect detection on the secondary
+    (horizontal) camera frame and burn the overlays + shared PASS/FAIL banner
+    onto it, so it is displayed as a processed stream too."""
+    roi_bgr, roi_rect = extract_roi(frame_rect)
+
+    boundary = extract_product_boundary(roi_bgr)
+    dim2d = measure_product(boundary)
+
+    _, defect_detections = analyze_surface_defects(frame_rect)
+
+    return compose_annotated_frame(
+        frame_rect,
+        roi_rect,
+        boundary,
+        dim2d.mm_per_px,
+        defect_detections,
+        [],   # pothole overlay stays on the primary frame
+        [],
+        result,
+    )
 
 
 if __name__ == "__main__":

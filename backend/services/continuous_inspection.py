@@ -41,7 +41,7 @@ class ContinuousInspector:
         """Start the loop, or update its settings if already running."""
         with self._lock:
             if interval_sec is not None:
-                self._interval_sec = max(0.5, float(interval_sec))
+                self._interval_sec = max(0.1, float(interval_sec))
             if ocr_enabled is not None:
                 self.ocr_enabled = bool(ocr_enabled)
             if self.running:

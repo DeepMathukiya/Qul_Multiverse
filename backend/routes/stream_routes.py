@@ -11,6 +11,7 @@ from backend.image_codec import encode_image_b64
 from backend.services.continuous_inspection import continuous_inspector
 from backend.services.frame_pairing import PairingError, get_latest_pair
 from backend.services.frame_store import frame_store
+from backend.services.result_store import result_store
 
 import cv2
 
@@ -55,6 +56,34 @@ def get_frame(device_id: str):
     if not ok:
         raise HTTPException(status_code=500, detail="encode failed")
     return Response(content=buf.tobytes(), media_type="image/jpeg")
+
+
+@router.get("/stream/processed")
+def processed_stream():
+    """Return ONLY the two processed (annotated) frames from the latest
+    inspection, plus a minimal status — this is what the dashboard shows.
+
+    Nothing raw and no heavy report payload is sent to the frontend.
+    """
+    result = result_store.latest()
+    if result is None:
+        raise HTTPException(status_code=404, detail="no inspection yet")
+
+    images = result.get("images", {})
+    quality = result.get("quality") or {}
+    return {
+        "inspection_id": result.get("inspection_id"),
+        "created_at": result.get("created_at"),
+        "overall_pass": quality.get("overall_pass"),
+        "failure_reasons": quality.get("failure_reasons", []),
+        "total_time_ms": result.get("total_time_ms", 0),
+        "vertical_device_id": result.get("vertical_device_id"),
+        "horizontal_device_id": result.get("horizontal_device_id"),
+        "vertical_fps": frame_store.get_fps(result.get("vertical_device_id") or ""),
+        "horizontal_fps": frame_store.get_fps(result.get("horizontal_device_id") or ""),
+        "annotated_vertical_b64": images.get("annotated_vertical"),
+        "annotated_horizontal_b64": images.get("annotated_horizontal"),
+    }
 
 
 @router.get("/latest_pair")

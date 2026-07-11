@@ -42,6 +42,17 @@ stereo:
   block_size: 5
   use_wls_filter: true
 
+# Primary surface-defect detector: one YOLO object-detection model covering
+# all five defect classes as bounding boxes (no masks). Replaces the classical
+# crack/scratch/dent CV below.
+defect_detection:
+  enabled: true
+  weights_path: "models/yolo_model_final.pt"   # relative to datascience/
+  confidence: 0.25   # detection threshold; per-class pass/fail limits live in product_specs.yaml
+  classes: ['Crack', 'Dent', 'Missing-head', 'Paint-off', 'Scratch']
+
+# Legacy classical-CV defect thresholds — no longer used by the pipeline
+# (kept for reference; defect detection now comes from `defect_detection`).
 surface_defects:
   min_crack_length_px: 40
   min_scratch_length_px: 30

@@ -136,47 +136,41 @@ def render_ocr(result: dict) -> None:
             st.text(ocr["raw_text"])
 
 
+_DEFECT_CLASSES = ["Crack", "Dent", "Missing-head", "Paint-off", "Scratch"]
+
+
 def render_surface_defects(result: dict) -> None:
     defects = result.get("surface_defects", {})
     images = result.get("images", {})
-    st.subheader("🛠️ Metal surface defects")
+    st.subheader("🛠️ Metal surface defects (YOLO detection)")
     st.caption(f"status: {_STATUS_ICONS.get(defects.get('status'), '')} {defects.get('status')}")
 
-    col_c, col_s, col_d = st.columns(3)
-    col_c.metric("Cracks", len(defects.get("cracks", [])))
-    col_s.metric("Scratches", len(defects.get("scratches", [])))
-    col_d.metric("Dents", len(defects.get("dents", [])))
+    counts = defects.get("counts", {})
+    cols = st.columns(len(_DEFECT_CLASSES))
+    for col, label in zip(cols, _DEFECT_CLASSES):
+        col.metric(label, counts.get(label, 0))
 
-    if defects.get("cracks"):
-        _show_image(images, "crack", "Crack detections")
+    _show_image(images, "defects", "Defect detections")
+
+    detections = defects.get("detections", [])
+    if detections:
         st.table([
-            {"crack": i + 1, f"length ({c['unit']})": c["length"],
-             f"max width ({c['unit']})": c["max_width"],
-             f"avg width ({c['unit']})": c["avg_width"],
-             f"area ({c['unit']}²)": c["area"],
-             "orientation °": c["orientation_deg"], "branches": c["branch_count"]}
-            for i, c in enumerate(defects["cracks"])
+            {
+                "#": i + 1,
+                "defect": d["label"],
+                "confidence": d["confidence"],
+                f"width ({d['unit']})": d["width"],
+                f"height ({d['unit']})": d["height"],
+                f"area ({d['unit']}²)": d["area"],
+                "bbox [x1,y1,x2,y2]": ", ".join(f"{v:.0f}" for v in d["bbox_xyxy"]),
+            }
+            for i, d in enumerate(detections)
         ])
+    elif defects.get("status") == "PASS":
+        st.success("No surface defects detected")
 
-    if defects.get("scratches"):
-        _show_image(images, "scratch", "Scratch detections")
-        st.table([
-            {"scratch": i + 1, f"length ({s['unit']})": s["length"],
-             f"width ({s['unit']})": s["width"], f"area ({s['unit']}²)": s["area"],
-             "orientation °": s["orientation_deg"]}
-            for i, s in enumerate(defects["scratches"])
-        ])
-
-    if defects.get("dents"):
-        _show_image(images, "dent", "Dent regions (from stereo depth)")
-        st.table([
-            {"dent": i + 1, "area (mm²)": d["area"], "diameter (mm)": d["diameter"],
-             "max depth (mm)": d["max_depth"], "deformation RMS (mm)": d["deformation"]}
-            for i, d in enumerate(defects["dents"])
-        ])
-    elif defects.get("dent_note"):
-        st.info(defects["dent_note"])
-
+    if defects.get("note"):
+        st.caption(defects["note"])
     if defects.get("error"):
         st.warning(defects["error"])
 
@@ -242,10 +236,12 @@ def render_full_result(result: dict) -> None:
     render_decision_banner(result)
 
     images = result.get("images", {})
-    if "annotated" in images:
-        _show_image(images, "annotated", "Inspection stream (all results overlaid)")
+    if "annotated_vertical" in images or "annotated_horizontal" in images:
+        col_v, col_h = st.columns(2)
+        _show_image(images, "annotated_vertical", "Vertical camera (processed)", col_v)
+        _show_image(images, "annotated_horizontal", "Horizontal camera (processed)", col_h)
     else:
-        # Older results without the composite frame fall back to raw cameras.
+        # Older results without the composite frames fall back to raw cameras.
         render_camera_images(result)
 
     quality = result.get("quality") or {}

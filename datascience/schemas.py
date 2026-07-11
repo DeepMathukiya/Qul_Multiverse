@@ -76,41 +76,29 @@ class Dim3DResult(BaseModel):
 
 
 # --------------------------------------------------
-# Surface defects
+# Surface defects (YOLO object detection — bounding boxes only)
 # --------------------------------------------------
 
-class CrackMetrics(BaseModel):
-    length: float
-    max_width: float
-    avg_width: float
-    area: float
-    orientation_deg: float
-    branch_count: int
-    unit: str = "px"
-
-
-class ScratchMetrics(BaseModel):
-    length: float
-    width: float
-    area: float
-    orientation_deg: float
-    unit: str = "px"
-
-
-class DentMetrics(BaseModel):
-    area: float
-    diameter: float
-    max_depth: float
-    deformation: float
-    unit: str = "mm"
+class DefectDetection(BaseModel):
+    """One YOLO-detected surface defect. Geometry is bbox-derived only
+    (this model outputs boxes, not masks). Real-world (mm) size is filled in
+    only when a valid scale exists — otherwise values stay in pixels."""
+    label: str                        # Crack | Dent | Missing-head | Paint-off | Scratch
+    confidence: float
+    bbox_xyxy: list[float]            # [x1, y1, x2, y2] in pixels
+    width: float                      # bbox width  (unit below)
+    height: float                     # bbox height (unit below)
+    area: float                       # bbox area   (unit below, squared)
+    unit: str = "px"                 # "px" | "mm"
 
 
 class SurfaceDefectResult(BaseModel):
     status: CheckStatus = CheckStatus.NOT_AVAILABLE
-    cracks: list[CrackMetrics] = Field(default_factory=list)
-    scratches: list[ScratchMetrics] = Field(default_factory=list)
-    dents: list[DentMetrics] = Field(default_factory=list)
-    dent_note: Optional[str] = None
+    enabled: bool = False
+    present: bool = False
+    detections: list[DefectDetection] = Field(default_factory=list)
+    counts: dict[str, int] = Field(default_factory=dict)  # per-class detection counts
+    note: Optional[str] = None
     error: Optional[str] = None
 
 
@@ -173,8 +161,8 @@ class InspectionResult(BaseModel):
     quality: Optional[QualityDecision] = None
 
     # base64-encoded JPEG/PNG images keyed by name:
-    # vertical, horizontal, roi, boundary, dimensions, depth_map, crack, scratch,
-    # dent, pothole
+    # vertical, horizontal, roi, boundary, dimensions, depth_map, defects, pothole,
+    # annotated_vertical, annotated_horizontal
     images: dict[str, str] = Field(default_factory=dict)
 
     timings_ms: dict[str, float] = Field(default_factory=dict)
