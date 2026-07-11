@@ -43,6 +43,12 @@ with st.sidebar:
 
     mode = st.radio("Acquisition mode", ["Live (two phones)", "Upload images"])
 
+    ocr_on = st.toggle(
+        "🔤 OCR (Sarvam) enabled",
+        value=True,
+        help="Off = skip the slow OCR API call; QR decoding still runs.",
+    )
+
 # ---------------- live mode ----------------
 
 continuous = False
@@ -55,16 +61,20 @@ if mode == "Live (two phones)":
         "🔁 Continuous streaming mode (auto-inspect + auto-refresh)",
         value=True,
     )
-    refresh_sec = st.slider(
-        "Dashboard refresh interval (s)", 2, 30, 5, disabled=not continuous
+    refresh_fps = st.slider(
+        "Dashboard refresh rate (FPS)", 0.2, 5.0, 1.0, 0.2,
+        disabled=not continuous,
+        help="How many times per second the dashboard reloads previews/results.",
     )
+    refresh_sec = 1.0 / refresh_fps
 
-    # Tell the backend loop to run (or stop) to match the toggle.
+    # Tell the backend loop to run (or stop) to match the toggles.
     try:
         stream_status = client.stream_status()
-        if continuous and not stream_status.get("running"):
-            stream_status = client.start_stream()
-        elif not continuous and stream_status.get("running"):
+        if continuous:
+            # start() also updates OCR setting while already running.
+            stream_status = client.start_stream(ocr_enabled=ocr_on)
+        elif stream_status.get("running"):
             stream_status = client.stop_stream()
     except Exception:
         stream_status = {}
@@ -72,6 +82,7 @@ if mode == "Live (two phones)":
     if continuous:
         st.caption(
             f"backend loop: {'🟢 running' if stream_status.get('running') else '🔴 stopped'} · "
+            f"OCR: {'on' if stream_status.get('ocr_enabled', True) else 'off'} · "
             f"inspections so far: {stream_status.get('inspection_count', 0)} · "
             f"{stream_status.get('last_error') or 'ok'}"
         )
@@ -97,21 +108,27 @@ if mode == "Live (two phones)":
         sync_icon = "🟢" if pair["synchronized"] else "🟠"
         st.caption(
             f"{sync_icon} pair Δt = {pair['time_delta_ms']} ms · "
-            f"vertical: {pair['vertical_device_id']} · "
-            f"horizontal: {pair['horizontal_device_id']}"
+            f"vertical: {pair['vertical_device_id']} "
+            f"({pair.get('vertical_fps', 0)} FPS) · "
+            f"horizontal: {pair['horizontal_device_id']} "
+            f"({pair.get('horizontal_fps', 0)} FPS)"
         )
         col_v, col_h = st.columns(2)
         show_image_bytes(
-            col_v, base64.b64decode(pair["vertical_image_b64"]), "Vertical camera"
+            col_v,
+            base64.b64decode(pair["vertical_image_b64"]),
+            f"Vertical camera · {pair.get('vertical_fps', 0)} FPS",
         )
         show_image_bytes(
-            col_h, base64.b64decode(pair["horizontal_image_b64"]), "Horizontal camera"
+            col_h,
+            base64.b64decode(pair["horizontal_image_b64"]),
+            f"Horizontal camera · {pair.get('horizontal_fps', 0)} FPS",
         )
 
     if inspect_clicked:
         with st.spinner("Running full inspection pipeline…"):
             try:
-                st.session_state["result"] = client.inspect_live()
+                st.session_state["result"] = client.inspect_live(ocr_enabled=ocr_on)
             except Exception as exc:
                 st.error(f"inspection failed: {exc}")
 
@@ -128,7 +145,9 @@ else:
         with st.spinner("Running full inspection pipeline…"):
             try:
                 st.session_state["result"] = client.inspect_upload(
-                    vertical_file.getvalue(), horizontal_file.getvalue()
+                    vertical_file.getvalue(),
+                    horizontal_file.getvalue(),
+                    ocr_enabled=ocr_on,
                 )
             except Exception as exc:
                 st.error(f"inspection failed: {exc}")

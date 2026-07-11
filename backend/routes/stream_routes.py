@@ -21,9 +21,12 @@ router = APIRouter()
 
 
 @router.post("/stream/start")
-def start_stream(interval_sec: Optional[float] = None):
-    """Start continuous inspection of the live pair."""
-    continuous_inspector.start(interval_sec)
+def start_stream(
+    interval_sec: Optional[float] = None,
+    ocr_enabled: Optional[bool] = None,
+):
+    """Start continuous inspection (or update its settings while running)."""
+    continuous_inspector.start(interval_sec, ocr_enabled)
     return continuous_inspector.status()
 
 
@@ -66,6 +69,8 @@ def latest_pair():
         "horizontal_device_id": pair.horizontal_device_id,
         "time_delta_ms": pair.time_delta_ms,
         "synchronized": pair.synchronized,
+        "vertical_fps": frame_store.get_fps(pair.vertical_device_id),
+        "horizontal_fps": frame_store.get_fps(pair.horizontal_device_id),
         "vertical_image_b64": encode_image_b64(pair.vertical_image),
         "horizontal_image_b64": encode_image_b64(pair.horizontal_image),
     }

@@ -29,13 +29,21 @@ class ContinuousInspector:
         self.last_inspection_id: str | None = None
         self.last_error: str | None = None
         self.last_run_at: float | None = None
+        self.ocr_enabled = True
 
     # ---- control ----
 
-    def start(self, interval_sec: float | None = None) -> None:
+    def start(
+        self,
+        interval_sec: float | None = None,
+        ocr_enabled: bool | None = None,
+    ) -> None:
+        """Start the loop, or update its settings if already running."""
         with self._lock:
             if interval_sec is not None:
                 self._interval_sec = max(0.5, float(interval_sec))
+            if ocr_enabled is not None:
+                self.ocr_enabled = bool(ocr_enabled)
             if self.running:
                 return
             self._stop_event.clear()
@@ -55,6 +63,7 @@ class ContinuousInspector:
         return {
             "running": self.running,
             "interval_sec": self._interval_sec,
+            "ocr_enabled": self.ocr_enabled,
             "inspection_count": self.inspection_count,
             "last_inspection_id": self.last_inspection_id,
             "last_error": self.last_error,
@@ -74,6 +83,7 @@ class ContinuousInspector:
                     pair.horizontal_image,
                     pair.vertical_device_id,
                     pair.horizontal_device_id,
+                    ocr_enabled=self.ocr_enabled,
                 )
                 result_store.add(result)
                 self.inspection_count += 1

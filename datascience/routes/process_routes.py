@@ -25,5 +25,6 @@ def process(request: ProcessRequest):
         horizontal,
         request.vertical_device_id,
         request.horizontal_device_id,
+        ocr_enabled=request.ocr_enabled,
     )
     return result.model_dump()

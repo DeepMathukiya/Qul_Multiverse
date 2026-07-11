@@ -37,8 +37,11 @@ class BackendClient:
         r.raise_for_status()
         return r.json()
 
-    def inspect_live(self, timeout_sec: float = 180) -> dict:
-        r = requests.post(f"{self.base_url}/inspect", timeout=timeout_sec)
+    def inspect_live(
+        self, ocr_enabled: bool | None = None, timeout_sec: float = 180
+    ) -> dict:
+        params = {} if ocr_enabled is None else {"ocr": ocr_enabled}
+        r = requests.post(f"{self.base_url}/inspect", params=params, timeout=timeout_sec)
         r.raise_for_status()
         return r.json()
 
@@ -46,13 +49,17 @@ class BackendClient:
         self,
         vertical_bytes: bytes,
         horizontal_bytes: bytes,
+        ocr_enabled: bool | None = None,
         timeout_sec: float = 180,
     ) -> dict:
         files = {
             "vertical": ("vertical.jpg", vertical_bytes, "image/jpeg"),
             "horizontal": ("horizontal.jpg", horizontal_bytes, "image/jpeg"),
         }
-        r = requests.post(f"{self.base_url}/inspect", files=files, timeout=timeout_sec)
+        params = {} if ocr_enabled is None else {"ocr": ocr_enabled}
+        r = requests.post(
+            f"{self.base_url}/inspect", files=files, params=params, timeout=timeout_sec
+        )
         r.raise_for_status()
         return r.json()
 
@@ -65,8 +72,16 @@ class BackendClient:
 
     # ---- continuous streaming mode ----
 
-    def start_stream(self, interval_sec: float | None = None) -> dict:
-        params = {"interval_sec": interval_sec} if interval_sec else {}
+    def start_stream(
+        self,
+        interval_sec: float | None = None,
+        ocr_enabled: bool | None = None,
+    ) -> dict:
+        params: dict = {}
+        if interval_sec:
+            params["interval_sec"] = interval_sec
+        if ocr_enabled is not None:
+            params["ocr_enabled"] = ocr_enabled
         r = requests.post(f"{self.base_url}/stream/start", params=params, timeout=10)
         r.raise_for_status()
         return r.json()

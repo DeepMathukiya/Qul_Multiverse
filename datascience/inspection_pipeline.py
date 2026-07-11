@@ -77,6 +77,7 @@ def run_inspection(
     horizontal_raw: np.ndarray,
     vertical_device_id: str | None = None,
     horizontal_device_id: str | None = None,
+    ocr_enabled: bool | None = None,
 ) -> InspectionResult:
     timer = StageTimer()
     result = InspectionResult(
@@ -109,7 +110,7 @@ def run_inspection(
 
     def _ocr_worker() -> None:
         t0 = __import__("time").perf_counter()
-        ocr_holder["result"] = inspect_product_info(vertical_rect)
+        ocr_holder["result"] = inspect_product_info(vertical_rect, ocr_enabled)
         ocr_holder["ms"] = ( __import__("time").perf_counter() - t0) * 1000.0
 
     ocr_thread = threading.Thread(target=_ocr_worker, daemon=True)

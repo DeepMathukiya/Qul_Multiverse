@@ -22,6 +22,7 @@ def run_inspection_remote(
     horizontal_image: np.ndarray,
     vertical_device_id: str | None = None,
     horizontal_device_id: str | None = None,
+    ocr_enabled: bool | None = None,
 ) -> dict:
     cfg = load_backend_config()["datascience"]
     url = cfg["url"].rstrip("/") + "/process"
@@ -32,6 +33,7 @@ def run_inspection_remote(
         "horizontal_image_b64": encode_image_b64(horizontal_image),
         "vertical_device_id": vertical_device_id,
         "horizontal_device_id": horizontal_device_id,
+        "ocr_enabled": ocr_enabled,
     }
 
     try:

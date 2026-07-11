@@ -191,3 +191,5 @@ class ProcessRequest(BaseModel):
     horizontal_image_b64: str
     vertical_device_id: Optional[str] = None
     horizontal_device_id: Optional[str] = None
+    # None = use processing_config.yaml; True/False = per-request override.
+    ocr_enabled: Optional[bool] = None

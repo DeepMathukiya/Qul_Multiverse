@@ -12,7 +12,12 @@ from datascience.ocr.qr_decoding import decode_qr
 from datascience.ocr.sarvam_client import extract_text
 
 
-def inspect_product_info(image: np.ndarray) -> OcrResult:
+def inspect_product_info(
+    image: np.ndarray,
+    enabled_override: bool | None = None,
+) -> OcrResult:
+    """Full OCR inspection. enabled_override (from the API request) wins
+    over the ocr.enabled config value; QR decoding always runs (local)."""
     result = OcrResult()
 
     ocr_cfg = load_system_config().get("ocr", {})
@@ -23,9 +28,14 @@ def inspect_product_info(image: np.ndarray) -> OcrResult:
     result.qr_present = qr_data is not None
     result.qr_data = qr_data
 
-    if not ocr_cfg.get("enabled", True):
+    enabled = (
+        enabled_override
+        if enabled_override is not None
+        else ocr_cfg.get("enabled", True)
+    )
+    if not enabled:
         result.status = CheckStatus.SKIPPED
-        result.error = "OCR disabled in system_config.yaml"
+        result.error = "OCR turned off for this inspection"
         return result
 
     text, error = extract_text(image)

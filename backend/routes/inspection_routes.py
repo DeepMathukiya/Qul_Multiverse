@@ -21,12 +21,14 @@ router = APIRouter()
 async def inspect(
     vertical: Optional[UploadFile] = File(None),
     horizontal: Optional[UploadFile] = File(None),
+    ocr: Optional[bool] = None,
 ):
     """Run one inspection.
 
     - With `vertical` and `horizontal` files: inspect the uploaded pair
       (test mode).
     - Without files: inspect the latest live pair from the two phones.
+    - `ocr` query param: true/false overrides the OCR setting for this run.
     """
     if vertical is not None and horizontal is not None:
         try:
@@ -50,7 +52,8 @@ async def inspect(
 
     try:
         result = run_inspection_remote(
-            vertical_image, horizontal_image, vertical_id, horizontal_id
+            vertical_image, horizontal_image, vertical_id, horizontal_id,
+            ocr_enabled=ocr,
         )
     except DatascienceUnavailable as exc:
         raise HTTPException(status_code=502, detail=str(exc))
