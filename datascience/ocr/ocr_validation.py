@@ -1,0 +1,54 @@
+"""Run the full OCR inspection: Sarvam text + parsing + QR + validation."""
+
+from __future__ import annotations
+
+import numpy as np
+
+from datascience.config_loader import load_product_specs, load_system_config
+from datascience.schemas import CheckStatus, OcrResult
+
+from datascience.ocr.field_parsing import is_expiry_valid, parse_fields
+from datascience.ocr.qr_decoding import decode_qr
+from datascience.ocr.sarvam_client import extract_text
+
+
+def inspect_product_info(image: np.ndarray) -> OcrResult:
+    result = OcrResult()
+
+    ocr_cfg = load_system_config().get("ocr", {})
+    rules = load_product_specs().get("ocr_rules", {})
+
+    # QR decoding is local and independent of the OCR provider.
+    qr_data = decode_qr(image)
+    result.qr_present = qr_data is not None
+    result.qr_data = qr_data
+
+    if not ocr_cfg.get("enabled", True):
+        result.status = CheckStatus.SKIPPED
+        result.error = "OCR disabled in system_config.yaml"
+        return result
+
+    text, error = extract_text(image)
+    result.raw_text = text
+    if error:
+        result.status = CheckStatus.NOT_AVAILABLE
+        result.error = error
+        return result
+
+    result.fields = parse_fields(text)
+    result.expiry_valid = is_expiry_valid(result.fields.expiry_date)
+
+    required = rules.get("required_fields", [])
+    field_values = result.fields.model_dump()
+    result.missing_required_fields = [
+        name for name in required if not field_values.get(name)
+    ]
+
+    ok = not result.missing_required_fields
+    if rules.get("require_qr", False):
+        ok = ok and result.qr_present
+    if rules.get("require_valid_expiry", False):
+        ok = ok and result.expiry_valid is True
+
+    result.status = CheckStatus.PASS if ok else CheckStatus.FAIL
+    return result

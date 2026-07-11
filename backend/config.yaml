@@ -1,0 +1,29 @@
+# Backend-layer configuration (acquisition + orchestration only).
+# The datascience and frontend layers have their own configs — nothing shared.
+
+server:
+  host: "0.0.0.0"
+  # 5000 = same port as the original example_receiver.py, so the phone app
+  # keeps posting to http://<pc-ip>:5000/upload unchanged.
+  port: 5000
+
+datascience:
+  url: "http://127.0.0.1:8100"
+  process_timeout_sec: 120
+
+# Continuous streaming mode: automatically inspect the latest phone pair in
+# a loop (also controllable at runtime via POST /stream/start | /stream/stop).
+continuous:
+  enabled: true
+  interval_sec: 5
+
+cameras:
+  # device_id values sent by the phone app. If auto_assign is true and these
+  # ids are not seen, the first two distinct devices become vertical/horizontal in
+  # order of first appearance.
+  vertical_device_id: "vertical"
+  horizontal_device_id: "horizontal"
+  auto_assign: true
+  # max timestamp difference for a vertical/horizontal frame pair to count as one
+  # inspection event
+  pair_tolerance_ms: 750

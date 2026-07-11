@@ -1,0 +1,58 @@
+# Datascience-layer configuration: everything the processing pipeline needs.
+# (The backend and frontend have their own configs — nothing is shared.)
+
+# Known Region of Interest for dimensional inspection, as fractions of the
+# image (x, y, w, h in 0..1). The product is expected inside this box.
+roi:
+  x: 0.05
+  y: 0.05
+  w: 0.90
+  h: 0.90
+
+# 2D fallback scale when no camera calibration exists.
+# mm_per_px: measured once with a reference object at the working distance.
+# Leave null to report pixel units (dimension tolerance checks then report
+# NOT_AVAILABLE instead of comparing px against mm specs).
+scale:
+  mm_per_px: null
+  reference_object_width_mm: null
+
+# Relative paths resolve against the datascience/ package folder.
+calibration_dir: "config/calibration"
+
+preprocessing:
+  resize_width: 1280
+  denoise: true
+  illumination_normalize: true
+
+ocr:
+  enabled: true
+  provider: "sarvam"
+  language: "en-IN"
+  # The API key comes from the SARVAM_API_KEY environment variable, loaded
+  # from datascience/.env (see datascience/.env.example). An api_key value
+  # here is only a last-resort fallback — prefer the .env file.
+  api_key_env: "SARVAM_API_KEY"
+  api_key: null
+  timeout_sec: 90
+
+stereo:
+  # StereoSGBM parameters (tuned post-baseline)
+  num_disparities: 128   # multiple of 16
+  block_size: 5
+  use_wls_filter: true
+
+surface_defects:
+  min_crack_length_px: 40
+  min_scratch_length_px: 30
+  min_elongation: 3.0        # skeleton_length^2 / area — filters blobs
+  max_component_area_ratio: 0.2  # discard huge regions (shadows/background)
+  dent_depth_threshold_mm: 0.5
+
+pothole:
+  enabled: true
+  weights_path: "models/pothole_yolov8_seg.pt"   # relative to datascience/
+  confidence: 0.4
+  # severity by mask area as fraction of image: > high_ratio -> high, etc.
+  severity_medium_ratio: 0.02
+  severity_high_ratio: 0.08

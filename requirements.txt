@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+python-multipart
+httpx
+requests
+opencv-contrib-python
+numpy
+streamlit
+pillow
+beautifulsoup4
+pyyaml
+python-dotenv
+sarvamai
+ultralytics

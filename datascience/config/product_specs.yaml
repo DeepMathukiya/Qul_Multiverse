@@ -1,0 +1,37 @@
+# Product specification and quality rules. All checks are evaluated by
+# datascience/quality/quality_rules.py — edit values here, no code changes.
+
+product:
+  name: "Sample Product"
+  id_pattern: null   # optional regex the OCR product_id must match
+
+ocr_rules:
+  required_fields: [expiry_date, serial_number, batch_number]
+  require_qr: true
+  require_valid_expiry: true
+
+# Expected 2D dimensions in millimeters with +/- tolerance.
+# Names must match Measurement names produced by measurements_2d.py.
+dimensions_2d:
+  length_mm:   { expected: 120.0, tolerance: 3.0 }
+  width_mm:    { expected: 60.0,  tolerance: 3.0 }
+  # diameter_mm: { expected: 50.0, tolerance: 1.0 }
+  # hole_diameter_mm: { expected: 8.0, tolerance: 0.5 }
+
+# Expected 3D dimensions in millimeters (requires stereo calibration).
+dimensions_3d:
+  height_mm:   { expected: 40.0, tolerance: 4.0 }
+
+defect_rules:
+  crack:
+    allowed: false            # any confirmed crack fails the product
+    max_length_mm: 0.0
+  scratch:
+    allowed: true
+    max_length_mm: 20.0       # scratches longer than this fail
+  dent:
+    allowed: true
+    max_depth_mm: 1.5         # deeper dents fail (needs stereo depth)
+
+pothole_rules:
+  fail_if_present: true
