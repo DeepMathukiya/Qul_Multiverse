@@ -76,93 +76,54 @@ def _ocr_checks(ocr: OcrResult, rules: dict) -> list[QualityCheck]:
 
 
 def _defect_checks(defects: SurfaceDefectResult, rules: dict) -> list[QualityCheck]:
+    """One check per configured defect class, evaluated over YOLO detections.
+
+    `allowed: false` fails on any detection; `allowed: true` with `max_count`
+    fails only above that count. Detections below `min_confidence` are ignored
+    for pass/fail (they still show in the detailed report).
+    """
+    if defects.status in (CheckStatus.NOT_AVAILABLE, CheckStatus.SKIPPED):
+        return [
+            QualityCheck(
+                name="Surface defects: analysis",
+                status=defects.status,
+                reason=defects.error or defects.note or "defect model unavailable",
+            )
+        ]
+
+    min_conf = float(rules.get("min_confidence", 0.0))
+    class_rules: dict = rules.get("classes", {})
+
     checks: list[QualityCheck] = []
-
-    crack_rules = rules.get("crack", {})
-    n_cracks = len(defects.cracks)
-    if not crack_rules.get("allowed", False):
-        checks.append(
-            QualityCheck(
-                name="Defect: no cracks",
-                status=CheckStatus.PASS if n_cracks == 0 else CheckStatus.FAIL,
-                measured=f"{n_cracks} crack(s)",
-                expected="0 cracks",
-                reason=None if n_cracks == 0 else
-                f"crack detected (longest {max(c.length for c in defects.cracks):.0f} px)",
-            )
+    for label, crule in class_rules.items():
+        n = sum(
+            1 for d in defects.detections
+            if d.label == label and d.confidence >= min_conf
         )
+        allowed = crule.get("allowed", False)
+        max_count = crule.get("max_count")
 
-    scratch_rules = rules.get("scratch", {})
-    n_scratches = len(defects.scratches)
-    if not scratch_rules.get("allowed", True):
-        checks.append(
-            QualityCheck(
-                name="Defect: no scratches",
-                status=CheckStatus.PASS if n_scratches == 0 else CheckStatus.FAIL,
-                measured=f"{n_scratches} scratch(es)",
-                expected="0 scratches",
-                reason=None if n_scratches == 0 else "scratch detected",
-            )
-        )
-    elif n_scratches and scratch_rules.get("max_length_mm") is not None:
-        # Length limit is in mm; scratch metrics may be px if uncalibrated.
-        longest = max(defects.scratches, key=lambda s: s.length)
-        if longest.unit == "mm":
-            limit = float(scratch_rules["max_length_mm"])
-            ok = longest.length <= limit
+        if not allowed:
             checks.append(
                 QualityCheck(
-                    name="Defect: scratch length within limit",
+                    name=f"Defect: no {label}",
+                    status=CheckStatus.PASS if n == 0 else CheckStatus.FAIL,
+                    measured=f"{n} {label}",
+                    expected=f"0 {label}",
+                    reason=None if n == 0 else f"{label} detected",
+                )
+            )
+        elif max_count is not None:
+            ok = n <= int(max_count)
+            checks.append(
+                QualityCheck(
+                    name=f"Defect: {label} within limit",
                     status=CheckStatus.PASS if ok else CheckStatus.FAIL,
-                    measured=f"{longest.length:.1f} mm",
-                    expected=f"<= {limit} mm",
-                    reason=None if ok else "scratch exceeds allowed length",
+                    measured=f"{n} {label}",
+                    expected=f"<= {max_count} {label}",
+                    reason=None if ok else f"too many {label} ({n} > {max_count})",
                 )
             )
-        else:
-            checks.append(
-                QualityCheck(
-                    name="Defect: scratch length within limit",
-                    status=CheckStatus.NOT_AVAILABLE,
-                    measured=f"{longest.length:.0f} px",
-                    expected=f"<= {scratch_rules['max_length_mm']} mm",
-                    reason="no calibration — cannot compare px against mm limit",
-                )
-            )
-
-    dent_rules = rules.get("dent", {})
-    if defects.dents:
-        deepest = max(defects.dents, key=lambda d: d.max_depth)
-        if not dent_rules.get("allowed", True):
-            checks.append(
-                QualityCheck(
-                    name="Defect: no dents",
-                    status=CheckStatus.FAIL,
-                    measured=f"{len(defects.dents)} dent(s)",
-                    expected="0 dents",
-                    reason=f"dent detected (max depth {deepest.max_depth:.2f} mm)",
-                )
-            )
-        elif dent_rules.get("max_depth_mm") is not None:
-            limit = float(dent_rules["max_depth_mm"])
-            ok = deepest.max_depth <= limit
-            checks.append(
-                QualityCheck(
-                    name="Defect: dent depth within limit",
-                    status=CheckStatus.PASS if ok else CheckStatus.FAIL,
-                    measured=f"{deepest.max_depth:.2f} mm",
-                    expected=f"<= {limit} mm",
-                    reason=None if ok else "dent deeper than allowed",
-                )
-            )
-    elif defects.dent_note:
-        checks.append(
-            QualityCheck(
-                name="Defect: dent analysis",
-                status=CheckStatus.NOT_AVAILABLE,
-                reason=defects.dent_note,
-            )
-        )
 
     return checks
 

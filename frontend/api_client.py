@@ -70,6 +70,14 @@ class BackendClient:
         r.raise_for_status()
         return r.json()
 
+    def processed_stream(self) -> dict | None:
+        """Only the two processed frames + minimal status (no heavy report)."""
+        r = requests.get(f"{self.base_url}/stream/processed", timeout=10)
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        return r.json()
+
     # ---- continuous streaming mode ----
 
     def start_stream(

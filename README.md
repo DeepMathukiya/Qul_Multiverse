@@ -85,11 +85,11 @@ datascience/              FastAPI processing service (port 8100)
   ocr/                      Sarvam AI OCR, field parsing, QR, validation
   dimensions_2d/            boundary extraction, geometric fitting, measures
   dimensions_3d/            disparity, depth reconstruction, 3D measures
-  surface_defects/          crack / scratch (classical CV), dent (stereo)
+  surface_defects/          YOLO detection: crack, dent, missing-head, paint-off, scratch
   pothole/                  YOLO segmentation + metrics (potholes ONLY)
   quality/                  rule engine + explainable decision
   overlays/                 dashboard overlay rendering
-  models/                   put pothole_yolov8_seg.pt here
+  models/                   yolo_model_final.pt (defects), pothole_yolov8_seg.pt (potholes)
 
 start_all_services.py     one-command coordinator (starts + monitors all 3)
 ```
@@ -106,9 +106,11 @@ start_all_services.py     one-command coordinator (starts + monitors all 3)
    hole spacing, angles, area, perimeter, roundness.
 4. **Stereo 3D** — SGBM disparity + WLS filter → depth map → height, depth,
    surface deformation, volume estimate.
-5. **Surface defects** (classical CV): cracks (length, max/avg width, area,
-   orientation, branches), scratches (length, width, area, orientation),
-   dents from stereo depth (area, diameter, max depth, deformation).
+5. **Surface defects** (YOLO object detection, `yolo_model_final.pt`) — one
+   model localizes all five defect classes as bounding boxes: **Crack, Dent,
+   Missing-head, Paint-off, Scratch**. Each detection reports class,
+   confidence, bbox, and bbox-derived width/height/area (no masks — this
+   model is detection-only).
 6. **Pothole** — YOLO segmentation (only used for potholes): mask, bbox,
    confidence, area, perimeter, max width, severity.
 7. **Quality rules** — every configured rule becomes a check with measured
@@ -150,7 +152,7 @@ Each layer loads its **own** `.env` file via `python-dotenv` — copy the
 |---|---|
 | `backend/config.yaml` | ports, phone device-id → vertical/horizontal mapping, pair tolerance, continuous mode |
 | `datascience/config/processing_config.yaml` | ROI box, mm/px scale, OCR key/language, stereo params, defect thresholds, YOLO weights path |
-| `datascience/config/product_specs.yaml` | expected dimensions + tolerances, required OCR fields, crack/scratch/dent limits — the whole quality rulebook |
+| `datascience/config/product_specs.yaml` | expected dimensions + tolerances, required OCR fields, per-class defect pass/fail rules (allowed / max count) — the whole quality rulebook |
 
 Quality rules are pure data — tune tolerances without touching code.
 
@@ -166,9 +168,25 @@ python -m datascience.calibration.stereo_calibration --vertical calib/stereo/ver
 ```
 
 After this, the 3D section switches from `NOT_AVAILABLE` to metric
-measurements and dent-depth checks activate. For 2D-only real units without
-full calibration, measure a reference object once and set `scale.mm_per_px`
-in `processing_config.yaml`.
+measurements (height, depth, deformation, volume). For 2D-only real units
+without full calibration, measure a reference object once and set
+`scale.mm_per_px` in `processing_config.yaml` — this also converts surface
+defect bounding boxes from pixels to millimeters.
+
+## Surface defect detection (YOLO)
+
+`datascience/models/yolo_model_final.pt` is a YOLO object-detection model
+(bounding boxes, not masks) trained on five classes: `Crack`, `Dent`,
+`Missing-head`, `Paint-off`, `Scratch`. It replaces the earlier classical-CV
+crack/scratch/dent detectors as the sole surface-defect stage.
+
+- Model path + confidence threshold: `defect_detection` in
+  `datascience/config/processing_config.yaml`.
+- Pass/fail per class (allow/deny, max count, confidence floor):
+  `defect_rules` in `datascience/config/product_specs.yaml`.
+- If the weights file is missing or `ultralytics` isn't installed, the
+  surface-defects section reports `NOT_AVAILABLE` without affecting the rest
+  of the inspection.
 
 ## Enabling pothole detection
 
