@@ -47,6 +47,25 @@ def resolve_camera_roles() -> tuple[str, str]:
     )
 
 
+def get_single_frame() -> tuple[str, np.ndarray]:
+    """Return the one device currently streaming, for when a full stereo
+    pair isn't available (only one phone connected). Dimension/volume
+    checks need the pair, so callers fall back to defect-only judgment."""
+    devices = frame_store.devices()
+    if len(devices) != 1:
+        raise PairingError(
+            f"need exactly one streaming device for single-frame mode, "
+            f"currently connected: {devices or 'none'}"
+        )
+
+    device_id = devices[0]
+    stored = frame_store.get(device_id)
+    if stored is None:
+        raise PairingError(f"no frame yet from '{device_id}'")
+
+    return device_id, stored.image
+
+
 def get_latest_pair() -> StereoPair:
     """Build a StereoPair from the latest frame of each role."""
     cfg = load_backend_config()["cameras"]

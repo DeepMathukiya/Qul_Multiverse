@@ -61,7 +61,7 @@ def segment_potholes(
     results = model.predict(
         image,
         conf=float(cfg.get("confidence", 0.4)),
-        verbose=False,
+        verbose=False,device="cuda"
     )
 
     detections: list[dict] = []

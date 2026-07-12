@@ -7,7 +7,6 @@ product:
 
 ocr_rules:
   required_fields: [expiry_date, serial_number, batch_number]
-  require_qr: true
   require_valid_expiry: true
 
 # Expected 2D dimensions in millimeters with +/- tolerance.
@@ -22,19 +21,18 @@ dimensions_2d:
 dimensions_3d:
   height_mm:   { expected: 40.0, tolerance: 4.0 }
 
-# Surface-defect rules, evaluated over YOLO detections (bounding boxes).
-# One check per class below. `allowed: false` fails the product on any
-# detection of that class; `allowed: true` with `max_count` fails only when
-# more than that many are present. `min_confidence` ignores weak detections
-# for pass/fail (they still appear in the report).
-defect_rules:
-  min_confidence: 0.35
-  classes:
-    Crack:        { allowed: false }
-    Dent:         { allowed: false }
-    Missing-head: { allowed: false }
-    Paint-off:    { allowed: true, max_count: 3 }
-    Scratch:      { allowed: true, max_count: 5 }
+# Surface-defect rule: any YOLO detection fails the product (see
+# datascience/quality/quality_rules.py::_defect_checks). Not configurable
+# here — the only tunable is defect_detection.confidence in
+# processing_config.yaml (the model's own detection cutoff).
 
 pothole_rules:
   fail_if_present: true
+
+# Compare live/stream measured area against the reference area captured from
+# the most recent Upload-mode inspection (in-memory only, cleared on
+# restart). Fails only if the measured area is more than tolerance_ratio
+# below the reference — not if it's larger.
+area_reference_rules:
+  enabled: true
+  tolerance_ratio: 0.02   # 2% shortfall allowed before FAIL

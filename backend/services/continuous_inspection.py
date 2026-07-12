@@ -14,8 +14,9 @@ from backend.config_loader import load_backend_config
 from backend.services.datascience_client import (
     DatascienceUnavailable,
     run_inspection_remote,
+    run_single_frame_inspection_remote,
 )
-from backend.services.frame_pairing import PairingError, get_latest_pair
+from backend.services.frame_pairing import PairingError, get_latest_pair, get_single_frame
 from backend.services.result_store import result_store
 
 
@@ -30,6 +31,7 @@ class ContinuousInspector:
         self.last_error: str | None = None
         self.last_run_at: float | None = None
         self.ocr_enabled = True
+        self.area_tolerance_ratio: float | None = None
 
     # ---- control ----
 
@@ -37,6 +39,7 @@ class ContinuousInspector:
         self,
         interval_sec: float | None = None,
         ocr_enabled: bool | None = None,
+        area_tolerance_ratio: float | None = None,
     ) -> None:
         """Start the loop, or update its settings if already running."""
         with self._lock:
@@ -44,6 +47,8 @@ class ContinuousInspector:
                 self._interval_sec = max(0.1, float(interval_sec))
             if ocr_enabled is not None:
                 self.ocr_enabled = bool(ocr_enabled)
+            if area_tolerance_ratio is not None:
+                self.area_tolerance_ratio = float(area_tolerance_ratio)
             if self.running:
                 return
             self._stop_event.clear()
@@ -64,6 +69,7 @@ class ContinuousInspector:
             "running": self.running,
             "interval_sec": self._interval_sec,
             "ocr_enabled": self.ocr_enabled,
+            "area_tolerance_ratio": self.area_tolerance_ratio,
             "inspection_count": self.inspection_count,
             "last_inspection_id": self.last_inspection_id,
             "last_error": self.last_error,
@@ -77,14 +83,24 @@ class ContinuousInspector:
         while not self._stop_event.is_set():
             started = time.time()
             try:
-                pair = get_latest_pair()
-                result = run_inspection_remote(
-                    pair.vertical_image,
-                    pair.horizontal_image,
-                    pair.vertical_device_id,
-                    pair.horizontal_device_id,
-                    ocr_enabled=self.ocr_enabled,
-                )
+                try:
+                    pair = get_latest_pair()
+                    result = run_inspection_remote(
+                        pair.vertical_image,
+                        pair.horizontal_image,
+                        pair.vertical_device_id,
+                        pair.horizontal_device_id,
+                        ocr_enabled=self.ocr_enabled,
+                        area_tolerance_ratio=self.area_tolerance_ratio,
+                    )
+                except PairingError:
+                    # Only one phone connected — no stereo pair to measure
+                    # area/volume from. Judge the product from crack/dent
+                    # (surface-defect) detection on that single frame instead.
+                    device_id, frame = get_single_frame()
+                    result = run_single_frame_inspection_remote(
+                        frame, device_id, ocr_enabled=self.ocr_enabled,
+                    )
                 result_store.add(result)
                 self.inspection_count += 1
                 self.last_inspection_id = result.get("inspection_id")

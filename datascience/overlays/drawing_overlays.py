@@ -104,7 +104,7 @@ def draw_pothole_detections(
 
 def compose_annotated_frame(
     frame: np.ndarray,
-    roi_rect: tuple[int, int, int, int],
+    roi_rect: tuple[int, int, int, int] | None,
     boundary,
     mm_per_px: float | None,
     defect_detections: list,
@@ -116,16 +116,21 @@ def compose_annotated_frame(
 
     PASS/FAIL banner + key numbers on top, boundary + dimensions inside the
     ROI, YOLO defect boxes + pothole overlays on the full frame.
+
+    roi_rect is None in single-camera (defect-only) mode, where there is no
+    stereo pair to run dimension/ROI analysis on — the ROI box and
+    length/width overlay are skipped accordingly.
     """
     out = frame.copy()
-    x, y, w, h = roi_rect
 
-    # ---- annotate inside the ROI ----
-    crop = out[y : y + h, x : x + w]
-    if boundary is not None:
-        crop = draw_dimensions(crop, boundary, mm_per_px)
-    out[y : y + h, x : x + w] = crop
-    cv2.rectangle(out, (x, y), (x + w, y + h), CYAN, 2)
+    # ---- annotate inside the ROI (skipped when there's no ROI to show) ----
+    if roi_rect is not None:
+        x, y, w, h = roi_rect
+        crop = out[y : y + h, x : x + w]
+        if boundary is not None:
+            crop = draw_dimensions(crop, boundary, mm_per_px)
+        out[y : y + h, x : x + w] = crop
+        cv2.rectangle(out, (x, y), (x + w, y + h), CYAN, 2)
 
     # ---- full-frame overlays (YOLO boxes are in full-frame coords) ----
     if defect_detections:
@@ -134,8 +139,14 @@ def compose_annotated_frame(
         out = draw_pothole_detections(out, pothole_masks, pothole_detections)
 
     # ---- status banner ----
-    passed = bool(result.quality and result.quality.overall_pass)
-    banner_color = (60, 160, 40) if passed else (40, 40, 210)
+    # None = nothing verifiable in this frame (no product/picture to judge).
+    passed = result.quality.overall_pass if result.quality else None
+    if passed is None:
+        banner_color = (110, 110, 110)
+        banner_text = "N/A"
+    else:
+        banner_color = (60, 160, 40) if passed else (40, 40, 210)
+        banner_text = "PASS" if passed else "FAIL"
     frame_w = out.shape[1]
     bar_h = 78
 
@@ -143,7 +154,7 @@ def compose_annotated_frame(
     cv2.rectangle(banner, (0, 0), (frame_w, bar_h), banner_color, -1)
     out = cv2.addWeighted(banner, 0.8, out, 0.2, 0)
 
-    cv2.putText(out, "PASS" if passed else "FAIL", (12, 42),
+    cv2.putText(out, banner_text, (12, 42),
                 cv2.FONT_HERSHEY_SIMPLEX, 1.4, (255, 255, 255), 3)
 
     defects = result.surface_defects
@@ -152,8 +163,7 @@ def compose_annotated_frame(
     else:
         defect_str = f"{len(defects.detections)} found" if defects.present else "none"
     info = (
-        f"defects[{defect_str}]  QR:{'Y' if result.ocr.qr_present else 'N'}  "
-        f"exp:{result.ocr.fields.expiry_date or '-'}"
+        f"defects[{defect_str}]  exp:{result.ocr.fields.expiry_date or '-'}"
     )
     dims = {m.name.rsplit("_", 1)[0]: f"{m.value}{m.unit}"
             for m in result.dims_2d.measurements}

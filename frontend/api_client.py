@@ -38,9 +38,16 @@ class BackendClient:
         return r.json()
 
     def inspect_live(
-        self, ocr_enabled: bool | None = None, timeout_sec: float = 180
+        self,
+        ocr_enabled: bool | None = None,
+        area_tolerance_ratio: float | None = None,
+        timeout_sec: float = 180,
     ) -> dict:
-        params = {} if ocr_enabled is None else {"ocr": ocr_enabled}
+        params: dict = {}
+        if ocr_enabled is not None:
+            params["ocr"] = ocr_enabled
+        if area_tolerance_ratio is not None:
+            params["area_tolerance_ratio"] = area_tolerance_ratio
         r = requests.post(f"{self.base_url}/inspect", params=params, timeout=timeout_sec)
         r.raise_for_status()
         return r.json()
@@ -50,13 +57,18 @@ class BackendClient:
         vertical_bytes: bytes,
         horizontal_bytes: bytes,
         ocr_enabled: bool | None = None,
+        area_tolerance_ratio: float | None = None,
         timeout_sec: float = 180,
     ) -> dict:
         files = {
             "vertical": ("vertical.jpg", vertical_bytes, "image/jpeg"),
             "horizontal": ("horizontal.jpg", horizontal_bytes, "image/jpeg"),
         }
-        params = {} if ocr_enabled is None else {"ocr": ocr_enabled}
+        params: dict = {}
+        if ocr_enabled is not None:
+            params["ocr"] = ocr_enabled
+        if area_tolerance_ratio is not None:
+            params["area_tolerance_ratio"] = area_tolerance_ratio
         r = requests.post(
             f"{self.base_url}/inspect", files=files, params=params, timeout=timeout_sec
         )
@@ -84,12 +96,15 @@ class BackendClient:
         self,
         interval_sec: float | None = None,
         ocr_enabled: bool | None = None,
+        area_tolerance_ratio: float | None = None,
     ) -> dict:
         params: dict = {}
         if interval_sec:
             params["interval_sec"] = interval_sec
         if ocr_enabled is not None:
             params["ocr_enabled"] = ocr_enabled
+        if area_tolerance_ratio is not None:
+            params["area_tolerance_ratio"] = area_tolerance_ratio
         r = requests.post(f"{self.base_url}/stream/start", params=params, timeout=10)
         r.raise_for_status()
         return r.json()

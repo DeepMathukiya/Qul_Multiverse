@@ -18,6 +18,7 @@ from datascience.schemas import (
 )
 
 from datascience.dimensions_2d.tolerance_check import check_dimensions
+from datascience.quality.reference_area_check import check_area_against_reference
 
 
 def _ocr_checks(ocr: OcrResult, rules: dict) -> list[QualityCheck]:
@@ -61,26 +62,15 @@ def _ocr_checks(ocr: OcrResult, rules: dict) -> list[QualityCheck]:
                 )
             )
 
-    if rules.get("require_qr", False):
-        checks.append(
-            QualityCheck(
-                name="QR code present",
-                status=CheckStatus.PASS if ocr.qr_present else CheckStatus.FAIL,
-                measured=(ocr.qr_data[:40] + "…") if ocr.qr_data and len(ocr.qr_data) > 40
-                else (ocr.qr_data or "not detected"),
-                expected="decodable QR code",
-                reason=None if ocr.qr_present else "no QR code detected",
-            )
-        )
     return checks
 
 
-def _defect_checks(defects: SurfaceDefectResult, rules: dict) -> list[QualityCheck]:
-    """One check per configured defect class, evaluated over YOLO detections.
-
-    `allowed: false` fails on any detection; `allowed: true` with `max_count`
-    fails only above that count. Detections below `min_confidence` are ignored
-    for pass/fail (they still show in the detailed report).
+def _defect_checks(defects: SurfaceDefectResult) -> list[QualityCheck]:
+    """Any YOLO-detected surface defect fails the product — the class doesn't
+    matter for the decision, only whether something was found. Every entry in
+    defects.detections already cleared the model's own confidence cutoff
+    (defect_detection.confidence), so no second threshold is applied here —
+    otherwise a defect that is visibly detected/drawn could still PASS.
     """
     if defects.status in (CheckStatus.NOT_AVAILABLE, CheckStatus.SKIPPED):
         return [
@@ -91,41 +81,17 @@ def _defect_checks(defects: SurfaceDefectResult, rules: dict) -> list[QualityChe
             )
         ]
 
-    min_conf = float(rules.get("min_confidence", 0.0))
-    class_rules: dict = rules.get("classes", {})
+    n = len(defects.detections)
 
-    checks: list[QualityCheck] = []
-    for label, crule in class_rules.items():
-        n = sum(
-            1 for d in defects.detections
-            if d.label == label and d.confidence >= min_conf
+    return [
+        QualityCheck(
+            name="Surface defects: none present",
+            status=CheckStatus.PASS if n == 0 else CheckStatus.FAIL,
+            measured=f"{n} defect(s)",
+            expected="0 defects",
+            reason=None if n == 0 else f"{n} surface defect(s) detected",
         )
-        allowed = crule.get("allowed", False)
-        max_count = crule.get("max_count")
-
-        if not allowed:
-            checks.append(
-                QualityCheck(
-                    name=f"Defect: no {label}",
-                    status=CheckStatus.PASS if n == 0 else CheckStatus.FAIL,
-                    measured=f"{n} {label}",
-                    expected=f"0 {label}",
-                    reason=None if n == 0 else f"{label} detected",
-                )
-            )
-        elif max_count is not None:
-            ok = n <= int(max_count)
-            checks.append(
-                QualityCheck(
-                    name=f"Defect: {label} within limit",
-                    status=CheckStatus.PASS if ok else CheckStatus.FAIL,
-                    measured=f"{n} {label}",
-                    expected=f"<= {max_count} {label}",
-                    reason=None if ok else f"too many {label} ({n} > {max_count})",
-                )
-            )
-
-    return checks
+    ]
 
 
 def _pothole_checks(pothole: PotholeResult, rules: dict) -> list[QualityCheck]:
@@ -160,13 +126,21 @@ def evaluate_quality_rules(
     dims_3d: Dim3DResult,
     defects: SurfaceDefectResult,
     pothole: PotholeResult,
+    area_tolerance_ratio: float | None = None,
 ) -> list[QualityCheck]:
     specs = load_product_specs()
+
+    # area_tolerance_ratio: None = use product_specs.yaml; otherwise a
+    # per-request override (e.g. the dashboard's tolerance slider).
+    area_rules = dict(specs.get("area_reference_rules", {}))
+    if area_tolerance_ratio is not None:
+        area_rules["tolerance_ratio"] = area_tolerance_ratio
 
     checks: list[QualityCheck] = []
     checks += _ocr_checks(ocr, specs.get("ocr_rules", {}))
     checks += check_dimensions(dims_2d, specs.get("dimensions_2d", {}), "2D dimension")
     checks += check_dimensions(dims_3d, specs.get("dimensions_3d", {}), "3D dimension")
-    checks += _defect_checks(defects, specs.get("defect_rules", {}))
+    checks += check_area_against_reference(dims_2d, area_rules)
+    checks += _defect_checks(defects)
     checks += _pothole_checks(pothole, specs.get("pothole_rules", {}))
     return checks
