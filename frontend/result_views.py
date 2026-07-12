@@ -43,12 +43,17 @@ def show_image_bytes(container, data: bytes, caption: str) -> None:
 
 def render_decision_banner(result: dict) -> None:
     quality = result.get("quality") or {}
-    if quality.get("overall_pass"):
-        st.success("## ✅ PASS — product accepted")
-    else:
-        st.error("## ❌ FAIL — product rejected")
-        for reason in quality.get("failure_reasons", []):
-            st.markdown(f"- 🔴 {reason}")
+    col_banner, col_time = st.columns([3, 1])
+    with col_banner:
+        if quality.get("overall_pass"):
+            st.success("## ✅ PASS — product accepted")
+        else:
+            st.error("## ❌ FAIL — product rejected")
+            for reason in quality.get("failure_reasons", []):
+                st.markdown(f"- 🔴 {reason}")
+    with col_time:
+        total_ms = result.get("total_time_ms", 0)
+        st.metric("⏱️ Datascience inference time", f"{total_ms / 1000:.2f} s")
 
 
 def render_camera_images(result: dict) -> None:
