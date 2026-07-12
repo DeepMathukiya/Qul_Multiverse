@@ -48,7 +48,7 @@ stereo:
 defect_detection:
   enabled: true
   weights_path: "models/yolo_model_final.pt"   # relative to datascience/
-  confidence: 0.25   # detection threshold; per-class pass/fail limits live in product_specs.yaml
+  confidence: 0.25   # detection threshold; pass/fail rule lives in product_specs.yaml
   classes: ['Crack', 'Dent', 'Missing-head', 'Paint-off', 'Scratch']
 
 # Legacy classical-CV defect thresholds — no longer used by the pipeline

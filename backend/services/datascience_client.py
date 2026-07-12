@@ -23,16 +23,49 @@ def run_inspection_remote(
     vertical_device_id: str | None = None,
     horizontal_device_id: str | None = None,
     ocr_enabled: bool | None = None,
+    is_upload: bool = False,
+    area_tolerance_ratio: float | None = None,
 ) -> dict:
     cfg = load_backend_config()["datascience"]
     url = cfg["url"].rstrip("/") + "/process"
     timeout = float(cfg.get("process_timeout_sec", 120))
-
+    area_tolerance_ratio= 100
     payload = {
         "vertical_image_b64": encode_image_b64(vertical_image),
         "horizontal_image_b64": encode_image_b64(horizontal_image),
         "vertical_device_id": vertical_device_id,
         "horizontal_device_id": horizontal_device_id,
+        "ocr_enabled": ocr_enabled,
+        "is_upload": is_upload,
+        "area_tolerance_ratio": area_tolerance_ratio,
+    }
+
+    try:
+        response = httpx.post(url, json=payload, timeout=timeout)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise DatascienceUnavailable(
+            f"datascience service call failed ({url}): {exc}"
+        ) from exc
+
+    return response.json()
+
+
+def run_single_frame_inspection_remote(
+    frame_image: np.ndarray,
+    device_id: str | None = None,
+    ocr_enabled: bool | None = None,
+) -> dict:
+    """Only one camera is streaming (no stereo pair) — send just that frame.
+    The datascience service skips dimension/volume checks in this case and
+    judges the product on surface-defect (crack/dent) detection alone."""
+    cfg = load_backend_config()["datascience"]
+    url = cfg["url"].rstrip("/") + "/process"
+    timeout = float(cfg.get("process_timeout_sec", 120))
+
+    payload = {
+        "horizontal_image_b64": encode_image_b64(frame_image),
+        "horizontal_device_id": device_id,
         "ocr_enabled": ocr_enabled,
     }
 

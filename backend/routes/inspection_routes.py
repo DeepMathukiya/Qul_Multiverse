@@ -22,6 +22,7 @@ async def inspect(
     vertical: Optional[UploadFile] = File(None),
     horizontal: Optional[UploadFile] = File(None),
     ocr: Optional[bool] = None,
+    area_tolerance_ratio: Optional[float] = None,
 ):
     """Run one inspection.
 
@@ -29,8 +30,11 @@ async def inspect(
       (test mode).
     - Without files: inspect the latest live pair from the two phones.
     - `ocr` query param: true/false overrides the OCR setting for this run.
+    - `area_tolerance_ratio`: overrides product_specs.yaml's allowed area
+      shortfall (e.g. the dashboard's tolerance slider), 0.02 = 2%.
     """
-    if vertical is not None and horizontal is not None:
+    is_upload = vertical is not None and horizontal is not None
+    if is_upload:
         try:
             vertical_image = decode_image_bytes(await vertical.read())
             horizontal_image = decode_image_bytes(await horizontal.read())
@@ -53,7 +57,8 @@ async def inspect(
     try:
         result = run_inspection_remote(
             vertical_image, horizontal_image, vertical_id, horizontal_id,
-            ocr_enabled=ocr,
+            ocr_enabled=ocr, is_upload=is_upload,
+            area_tolerance_ratio=area_tolerance_ratio,
         )
     except DatascienceUnavailable as exc:
         raise HTTPException(status_code=502, detail=str(exc))

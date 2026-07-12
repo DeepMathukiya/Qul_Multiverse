@@ -43,7 +43,10 @@ def show_image_bytes(container, data: bytes, caption: str) -> None:
 
 def render_decision_banner(result: dict) -> None:
     quality = result.get("quality") or {}
-    if quality.get("overall_pass"):
+    overall_pass = quality.get("overall_pass")
+    if overall_pass is None:
+        st.warning("## ⚪ NOT AVAILABLE — nothing verifiable in this frame")
+    elif overall_pass:
         st.success("## ✅ PASS — product accepted")
     else:
         st.error("## ❌ FAIL — product rejected")
@@ -123,8 +126,6 @@ def render_ocr(result: dict) -> None:
             {"field": "Serial number", "value": fields.get("serial_number") or "—", "note": ""},
             {"field": "Batch number", "value": fields.get("batch_number") or "—", "note": ""},
             {"field": "Product ID", "value": fields.get("product_id") or "—", "note": ""},
-            {"field": "QR code", "value": ocr.get("qr_data") or "not detected",
-             "note": "present" if ocr.get("qr_present") else "missing"},
         ]
     )
     if ocr.get("missing_required_fields"):
@@ -225,7 +226,9 @@ def render_timings(result: dict) -> None:
     timings = result.get("timings_ms", {})
     if timings:
         st.table([{"stage": k, "ms": v} for k, v in timings.items()])
-    st.caption(f"total: {result.get('total_time_ms', 0):.0f} ms")
+    total_time_ms = result.get("total_time_ms", 0)
+    datascience_fps = round(1000.0 / total_time_ms, 1) if total_time_ms else 0.0
+    st.caption(f"total: {total_time_ms:.0f} ms · datascience: {datascience_fps} FPS")
 
 
 def render_full_result(result: dict) -> None:
@@ -247,9 +250,12 @@ def render_full_result(result: dict) -> None:
     quality = result.get("quality") or {}
     total = len(quality.get("checks", []))
     failed = sum(1 for c in quality.get("checks", []) if c["status"] == "FAIL")
+    total_time_ms = result.get("total_time_ms", 0)
+    datascience_fps = round(1000.0 / total_time_ms, 1) if total_time_ms else 0.0
     st.caption(
         f"checks: {total - failed}/{total} passed · "
-        f"processing: {result.get('total_time_ms', 0):.0f} ms"
+        f"datascience: {datascience_fps} FPS · "
+        f"processing: {total_time_ms:.0f} ms"
     )
 
     with st.expander("📋 Detailed report"):

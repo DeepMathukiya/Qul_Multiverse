@@ -1,4 +1,4 @@
-"""Run the full OCR inspection: Sarvam text + parsing + QR + validation."""
+"""Run the full OCR inspection: Sarvam text + parsing + validation."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from datascience.config_loader import load_product_specs, load_system_config
 from datascience.schemas import CheckStatus, OcrResult
 
 from datascience.ocr.field_parsing import is_expiry_valid, parse_fields
-from datascience.ocr.qr_decoding import decode_qr
 from datascience.ocr.sarvam_client import extract_text
 
 
@@ -17,16 +16,11 @@ def inspect_product_info(
     enabled_override: bool | None = None,
 ) -> OcrResult:
     """Full OCR inspection. enabled_override (from the API request) wins
-    over the ocr.enabled config value; QR decoding always runs (local)."""
+    over the ocr.enabled config value."""
     result = OcrResult()
 
     ocr_cfg = load_system_config().get("ocr", {})
     rules = load_product_specs().get("ocr_rules", {})
-
-    # QR decoding is local and independent of the OCR provider.
-    qr_data = decode_qr(image)
-    result.qr_present = qr_data is not None
-    result.qr_data = qr_data
 
     enabled = (
         enabled_override
@@ -55,8 +49,6 @@ def inspect_product_info(
     ]
 
     ok = not result.missing_required_fields
-    if rules.get("require_qr", False):
-        ok = ok and result.qr_present
     if rules.get("require_valid_expiry", False):
         ok = ok and result.expiry_valid is True
 

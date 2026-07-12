@@ -46,8 +46,30 @@ with st.sidebar:
     ocr_on = st.toggle(
         "🔤 OCR (Sarvam) enabled",
         value=True,
-        help="Off = skip the slow OCR API call; QR decoding still runs.",
+        help="Off = skip the slow OCR API call.",
     )
+
+    area_tolerance_pct = st.slider(
+        "📐 Area shortfall tolerance (%)",
+        min_value=0.0, max_value=30.0, value=2.0, step=0.5,
+        help="A product FAILs the area check only if its measured area is "
+             "more than this % below the reference area (set by the last "
+             "Upload-mode inspection). Larger area never fails.",
+    )
+    area_tolerance_ratio = area_tolerance_pct / 100.0
+
+    st.divider()
+    st.caption("Session tally (Live mode)")
+    if st.button("🔄 Reset counters"):
+        st.session_state["device_pass_count"] = 0
+        st.session_state["device_fail_count"] = 0
+        st.session_state["last_counted_inspection_id"] = None
+
+# Running PASS/FAIL tally across inspections, kept in session_state so it
+# survives the auto-refresh reruns of continuous streaming mode.
+st.session_state.setdefault("device_pass_count", 0)
+st.session_state.setdefault("device_fail_count", 0)
+st.session_state.setdefault("last_counted_inspection_id", None)
 
 # ---------------- live mode: two processed streams ----------------
 
@@ -71,7 +93,8 @@ if mode == "Live (two phones)":
     try:
         if continuous:
             stream_status = client.start_stream(
-                interval_sec=refresh_sec, ocr_enabled=ocr_on
+                interval_sec=refresh_sec, ocr_enabled=ocr_on,
+                area_tolerance_ratio=area_tolerance_ratio,
             )
         else:
             stream_status = client.stream_status()
@@ -90,7 +113,9 @@ if mode == "Live (two phones)":
     if not continuous and st.button("▶️ Run one inspection", type="primary"):
         with st.spinner("Running inspection…"):
             try:
-                client.inspect_live(ocr_enabled=ocr_on)
+                client.inspect_live(
+                    ocr_enabled=ocr_on, area_tolerance_ratio=area_tolerance_ratio
+                )
             except Exception as exc:
                 st.error(f"inspection failed: {exc}")
 
@@ -109,6 +134,24 @@ if mode == "Live (two phones)":
     else:
         passed = proc.get("overall_pass")
         badge = "✅ PASS" if passed else ("❌ FAIL" if passed is not None else "…")
+
+        # Count each inspection exactly once (by id) so the auto-refresh loop
+        # doesn't re-tally the same result while waiting for the next one.
+        insp_id = proc.get("inspection_id")
+        if insp_id and insp_id != st.session_state["last_counted_inspection_id"]:
+            st.session_state["last_counted_inspection_id"] = insp_id
+            if passed:
+                st.session_state["device_pass_count"] += 1
+            elif passed is not None:
+                st.session_state["device_fail_count"] += 1
+
+        pass_count = st.session_state["device_pass_count"]
+        fail_count = st.session_state["device_fail_count"]
+        col_total, col_pass, col_fail = st.columns(3)
+        col_total.metric("Devices inspected", pass_count + fail_count)
+        col_pass.metric("✅ Not defected", pass_count)
+        col_fail.metric("❌ Defected", fail_count)
+
         st.subheader(f"Processed streams — {badge}")
 
         col_v, col_h = st.columns(2)
@@ -130,7 +173,10 @@ if mode == "Live (two phones)":
         if not passed and proc.get("failure_reasons"):
             for reason in proc["failure_reasons"]:
                 st.markdown(f"- 🔴 {reason}")
-        st.caption(f"processing: {proc.get('total_time_ms', 0):.0f} ms")
+        st.caption(
+            f"datascience: {proc.get('datascience_fps', 0)} FPS · "
+            f"processing: {proc.get('total_time_ms', 0):.0f} ms"
+        )
 
     if continuous:
         time.sleep(refresh_sec)
@@ -152,6 +198,7 @@ else:
                     vertical_file.getvalue(),
                     horizontal_file.getvalue(),
                     ocr_enabled=ocr_on,
+                    area_tolerance_ratio=area_tolerance_ratio,
                 )
             except Exception as exc:
                 st.error(f"inspection failed: {exc}")

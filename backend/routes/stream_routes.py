@@ -25,9 +25,10 @@ router = APIRouter()
 def start_stream(
     interval_sec: Optional[float] = None,
     ocr_enabled: Optional[bool] = None,
+    area_tolerance_ratio: Optional[float] = None,
 ):
     """Start continuous inspection (or update its settings while running)."""
-    continuous_inspector.start(interval_sec, ocr_enabled)
+    continuous_inspector.start(interval_sec, ocr_enabled, area_tolerance_ratio)
     return continuous_inspector.status()
 
 
@@ -71,12 +72,15 @@ def processed_stream():
 
     images = result.get("images", {})
     quality = result.get("quality") or {}
+    total_time_ms = result.get("total_time_ms", 0)
     return {
         "inspection_id": result.get("inspection_id"),
         "created_at": result.get("created_at"),
         "overall_pass": quality.get("overall_pass"),
         "failure_reasons": quality.get("failure_reasons", []),
-        "total_time_ms": result.get("total_time_ms", 0),
+        "total_time_ms": total_time_ms,
+        # datascience processing throughput: 1000 / (ms per inspection).
+        "datascience_fps": round(1000.0 / total_time_ms, 1) if total_time_ms else 0.0,
         "vertical_device_id": result.get("vertical_device_id"),
         "horizontal_device_id": result.get("horizontal_device_id"),
         "vertical_fps": frame_store.get_fps(result.get("vertical_device_id") or ""),

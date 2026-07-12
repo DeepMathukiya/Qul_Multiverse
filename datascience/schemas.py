@@ -37,8 +37,6 @@ class OcrResult(BaseModel):
     provider: str = "sarvam"
     raw_text: str = ""
     fields: OcrFields = Field(default_factory=OcrFields)
-    qr_present: bool = False
-    qr_data: Optional[str] = None
     expiry_valid: Optional[bool] = None
     missing_required_fields: list[str] = Field(default_factory=list)
     error: Optional[str] = None
@@ -138,7 +136,9 @@ class QualityCheck(BaseModel):
 
 
 class QualityDecision(BaseModel):
-    overall_pass: bool
+    # None = no judgement could be made (nothing in the frame(s) was
+    # verifiable — every check came back NOT_AVAILABLE/SKIPPED).
+    overall_pass: Optional[bool] = None
     checks: list[QualityCheck] = Field(default_factory=list)
     failure_reasons: list[str] = Field(default_factory=list)
 
@@ -174,10 +174,22 @@ class InspectionResult(BaseModel):
 # --------------------------------------------------
 
 class ProcessRequest(BaseModel):
-    """Backend -> datascience /process payload."""
-    vertical_image_b64: str
-    horizontal_image_b64: str
+    """Backend -> datascience /process payload.
+
+    Both images present = full stereo inspection (dimensions + volume +
+    defects). Only one present = single-camera fallback (no stereo pair to
+    measure area/volume from) — the product is judged on surface-defect
+    (crack/dent) detection alone.
+    """
+    vertical_image_b64: Optional[str] = None
+    horizontal_image_b64: Optional[str] = None
     vertical_device_id: Optional[str] = None
     horizontal_device_id: Optional[str] = None
     # None = use processing_config.yaml; True/False = per-request override.
     ocr_enabled: Optional[bool] = None
+    # True = this pair came from Upload mode — its measured area becomes the
+    # new reference baseline for area_reference_rules (see reference_store.py).
+    is_upload: bool = False
+    # None = use product_specs.yaml's area_reference_rules.tolerance_ratio;
+    # otherwise a per-request override (e.g. the dashboard's tolerance slider).
+    area_tolerance_ratio: Optional[float] = None
