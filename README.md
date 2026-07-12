@@ -1,9 +1,12 @@
 # Computer-Vision Quality Analysis System
 
-End-to-end product quality inspection using **two mobile cameras as a stereo
-rig**. Combines OCR, classical computer vision, stereo 3D measurement and
-YOLO detection/segmentation into one explainable **PASS / FAIL** decision
-shown on a Streamlit dashboard.
+Automated product quality inspection: two phone cameras capture the product,
+**Sarvam OCR** reads the label fields, quantized **YOLO** models (surface defects like crack/dent, and
+potholes) and quantized to run efficiently on the deployment device — detect
+what's wrong, and classical computer vision measures dimensions. Every
+captured product is compared against its expected reference specs, and all
+of it is combined into one explainable **PASS / FAIL** verdict shown on a
+Streamlit dashboard.
 
 The system is split into **three fully independent layers** that talk only
 over HTTP — no shared code, no shared config:
@@ -85,93 +88,61 @@ python -m datascience.inspection_pipeline --vertical v.jpg --horizontal h.jpg [-
 
 ---
 
-## What each inspection does — pipeline stages
+## What happens to each product — step by step
 
-`datascience/inspection_pipeline.py::run_inspection()` is the single entry
-point. Every stage is individually timed (`result.timings_ms`) and degrades
-independently to `NOT_AVAILABLE`/`SKIPPED` on failure — one broken stage
-never crashes the whole inspection.
+Every product photo runs through the same assembly line of checks. Each step
+is **independent**: if one can't run (say, OCR has no API key), it quietly
+reports "not available" and the rest keep going — one broken step never
+crashes the whole inspection. Each step is also timed so you can see what's
+slow.
 
-1. **Preprocessing** (`preprocessing/`) — per-camera undistort (using saved
-   intrinsics, if calibrated) → resize/denoise/illumination-normalize →
-   stereo rectify (only if a stereo calibration exists) → crop the
-   configured ROI.
-2. **OCR** (`ocr/`, Sarvam AI Document Intelligence) — runs in a background
-   thread *in parallel* with steps 3–6, because it's the slowest,
-   network-bound stage. Extracts expiry date, manufacturing date, serial
-   number, batch number, product ID, and the full raw label text. The
-   pipeline joins this thread right before evaluating quality rules.
-3. **2D dimensions** (`dimensions_2d/`, classical CV only, no ML) —
-   threshold + Canny/Sobel + morphology + contours → boundary → length,
-   width, diameter, hole diameters/spacing, angles, area, perimeter,
-   roundness. When this run came from **Upload mode**, its measured area
-   is captured as the new reference baseline (see
-   [Area-reference check](#area-reference-check-live-vs-a-known-good-sample) below).
-4. **Stereo 3D** (`dimensions_3d/`) — SGBM disparity + WLS filter → depth
-   map → height, depth, surface deformation, volume. Requires a saved
-   stereo calibration; otherwise reports `NOT_AVAILABLE` instead of
-   guessing.
-5. **Surface defects** (`surface_defects/yolo_defect_detection.py`) — one
-   YOLO **object-detection** model (`models/yolo_model_final.pt`) localizes
-   defects as bounding boxes. `processing_config.yaml` lists five trained
-   classes — **Crack, Dent, Missing-head, Paint-off, Scratch** — but the
-   currently loaded weights are, in practice, only producing **Crack** and
-   **Dent** detections; the label returned per box comes straight from the
-   model's own `res.names`, not from that config list (which isn't used to
-   filter). Detection-only (no masks); each box reports class, confidence,
-   and bbox-derived width/height/area. This is the *sole* surface-defect
-   stage — the classical-CV crack/dent/scratch detectors under
-   `surface_defects/` are legacy and no longer wired into the pipeline
-   (kept for reference only).
-6. **Pothole** (`pothole/`, YOLO segmentation, potholes only) — mask, bbox,
-   confidence, area, perimeter, max width, severity.
-7. **Quality rules** (`quality/quality_rules.py`) — every configured rule
-   becomes a `QualityCheck` with measured value, expected range and reason.
-8. **Decision** (`quality/decision_report.py`) — `overall_pass = True` only
-   if no check FAILed; `overall_pass = None` if *nothing* was verifiable at
-   all (e.g. no product in frame). `NOT_AVAILABLE` checks never fail the
-   product but stay visible so an operator knows what couldn't be checked.
-9. **Annotate** (`overlays/drawing_overlays.py`) — burns ROI, dimensions,
-   defect boxes, pothole masks and a PASS/FAIL banner onto **both** camera
-   frames independently (the horizontal frame gets its own boundary +
-   defect pass so it's a genuine processed stream, not a copy).
+*(Entry point: `datascience/inspection_pipeline.py::run_inspection()`.)*
 
-If only one phone is streaming, `run_single_frame_inspection()` runs
-instead: preprocessing → surface-defect YOLO → quality rules → annotate
-only. OCR is `SKIPPED`, dimensions/volume/pothole are `NOT_AVAILABLE`
-("no stereo pair"), and PASS/FAIL rests solely on whether YOLO found a
-defect in that one frame.
+| # | Step | In plain words | What it produces |
+|---|---|---|---|
+| 1 | **Clean up the image** (`preprocessing/`) | Straighten, resize, remove noise, even out lighting, and crop to the area of interest. | A tidy image the other steps can trust. |
+| 2 | **Read the label** (`ocr/`, Sarvam OCR) | Reads the printed text. Runs *at the same time* as the steps below because it's the slowest (it calls an online service). | Expiry date, mfg date, serial, batch, product ID, raw text. |
+| 3 | **Measure size & shape** (`dimensions_2d/`) | Traces the product's outline (edge detection) and measures it. If this photo was uploaded as the reference, its area becomes the "good" baseline. | Length, width, diameter, holes, area, perimeter, roundness. |
+| 4 | **Measure depth in 3D** (`dimensions_3d/`) | Uses the two camera angles to estimate height/depth/volume. Only works after calibration; otherwise skipped. | Height, depth, deformation, volume. |
+| 5 | **Find surface damage** (`surface_defects/`, YOLO) | A YOLO vision model draws boxes around defects. Trained for five classes, but current weights mainly flag **Crack** and **Dent**. | Boxes with class, confidence, size. |
+| 6 | **Find potholes** (`pothole/`, YOLO) | A separate YOLO model outlines potholes. | Mask, size, severity. |
+| 7 | **Apply the rulebook** (`quality/quality_rules.py`) | Turns every measurement into a pass/fail check against the expected specs. | One check per rule, with the reason. |
+| 8 | **Decide PASS / FAIL** (`quality/decision_report.py`) | PASS only if nothing failed; "inconclusive" if nothing could be checked at all. | The final verdict + failure reasons. |
+| 9 | **Draw the result** (`overlays/drawing_overlays.py`) | Paints the boxes, measurements and a PASS/FAIL banner onto both camera images. | Two annotated images for the dashboard. |
 
-### Honest units (important)
+**Only one phone connected?** The system still works — it runs a lighter
+single-camera pass (clean up → find defects → verdict → draw). OCR and the
+size/depth measurements are skipped, so PASS/FAIL rests only on whether a
+defect was found in that one image.
 
-Millimeter values are reported **only** when a valid calibration or measured
-reference scale exists. Without it, measurements stay in pixels and the
-corresponding tolerance checks report `NOT_AVAILABLE` instead of comparing
-pixels against millimeter specs. The same rule applies to surface-defect
-bounding-box sizes.
+### A note on honesty of measurements
+
+The system **never guesses real-world sizes.** It only reports millimeters
+when it has been properly calibrated (or given a known scale). Otherwise it
+keeps measurements in pixels and marks the mm-based checks as "not available"
+rather than pretending a pixel is a millimeter.
 
 ---
 
-## Continuous streaming mode
+## Live mode — inspecting continuously
 
-The backend runs a background thread (`ContinuousInspector` in
-`backend/services/continuous_inspection.py`) that keeps inspecting the
-newest vertical/horizontal pair automatically
-(`continuous.enabled: true` in `backend/config.yaml`, on by default at
-service boot). The dashboard's **Live** mode has a 🔁 toggle that
-starts/stops this loop and auto-refreshes the page, so results flow in
-continuously while the phones stream.
+You don't have to trigger each inspection by hand. In **Live** mode the
+backend keeps a loop running that automatically re-inspects the newest pair
+of phone images every few seconds, so results stream in on their own while
+the phones keep filming. The dashboard has a 🔁 toggle to start/stop this and
+refresh the screen automatically. (On by default; code lives in
+`backend/services/continuous_inspection.py`.)
 
-- If both cameras have a recent frame, the loop runs the full stereo
-  pipeline.
-- If **only one** phone is currently streaming, it falls back to
-  `get_single_frame()` + the single-camera, defect-only pipeline described
-  above, instead of stalling until the second phone reconnects.
-- Inspection time counts toward the interval, so the loop never falls
-  behind indefinitely under load.
+Sensible fallbacks are built in:
 
-Runtime control (also used by the dashboard's FPS slider, which sets
-`interval_sec = 1 / FPS` on every rerun):
+- **Both phones connected** → full inspection with size/depth.
+- **Only one phone** → automatically drops to the lighter single-camera pass
+  instead of freezing until the second phone reconnects.
+- The loop counts its own processing time toward the interval, so it never
+  keeps falling further behind under load.
+
+**Controlling it directly** (the dashboard's FPS slider just calls these for
+you — it sets `interval_sec = 1 / FPS`):
 
 ```
 POST /stream/start?interval_sec=5&ocr_enabled=true&area_tolerance_ratio=0.02
@@ -179,31 +150,28 @@ POST /stream/stop
 GET  /stream/status
 ```
 
-The dashboard polls `GET /stream/processed`, which returns **only** the two
-annotated (already-overlaid) frames plus a minimal status block — no raw
-images, no heavy per-check report — keeping the live view light.
+To keep the live view fast, the dashboard polls `GET /stream/processed`,
+which returns just the two finished (annotated) images plus a small status
+block — not the full heavy report.
 
-## Area-reference check (live vs. a known-good sample)
+## Comparing against a known-good sample
 
-A newer quality rule compares the *measured 2D area* of each live/streamed
-frame against a baseline captured from the operator's most recent
-**Upload-mode** inspection:
+This is the "does it match a good one?" check. First you upload a photo of a
+**known-good product** (Upload mode) — the system remembers its measured
+area as the baseline. After that, every live product is compared to it:
 
-- `datascience/quality/reference_store.py` — trivial in-memory
-  `{value, unit}` baseline. Cleared on process restart; nothing is
-  persisted to disk.
-- `datascience/quality/reference_area_check.py` —
-  `capture_reference_area()` is called after every Upload-mode inspection
-  to (re)set the baseline; `check_area_against_reference()` runs on every
-  subsequent inspection and **FAILs only if the measured area is more than
-  `tolerance_ratio` below** the reference (a larger area never fails —
-  this is meant to catch a product that's short/missing material, not one
-  that's oversized).
-- Tunable via `area_reference_rules` in `product_specs.yaml`, or per-request
-  via the dashboard's "Area shortfall tolerance (%)" slider
-  (`area_tolerance_ratio` param on `/inspect` and `/stream/start`).
-- Reports `NOT_AVAILABLE` until a reference has been captured, or if the
-  current frame's area measurement isn't available (no calibration/scale).
+- It **fails only if the product is meaningfully *smaller*** than the good
+  sample (i.e. short or missing material). A bigger product never fails this
+  check — the goal is to catch pieces that are missing chunks.
+- How much smaller is "too small" is tunable: the `area_reference_rules` in
+  `product_specs.yaml`, or the dashboard's "Area shortfall tolerance (%)"
+  slider.
+- Until you've uploaded a good sample (or if size can't be measured), this
+  check simply reports "not available" — it never guesses.
+
+The baseline lives in memory only (`datascience/quality/reference_store.py`)
+and resets when the service restarts, so re-upload a reference after a
+restart. Logic is in `datascience/quality/reference_area_check.py`.
 
 ---
 
@@ -297,38 +265,30 @@ QUL_multiverse/
 
 ---
 
-## End-to-end flow
+## How a result travels through the system
 
-**Live / continuous streaming (the normal running mode):**
+**Live mode (the normal, hands-off way to run it):**
 
-1. Both phones `POST /upload` (multipart `frame` + `device_id` +
-   `timestamp`) to the backend every frame. `frame_store.update()` keeps
-   only the *latest* frame per device, plus a rolling FPS estimate.
-2. Every `interval_sec`, `ContinuousInspector._loop()` calls
-   `frame_pairing.get_latest_pair()`, which maps device ids to
-   vertical/horizontal roles (configured ids, or auto-assign the first two
-   distinct devices seen) and checks they're within `pair_tolerance_ms`
-   (750ms default) of each other.
-3. The pair is base64-encoded and POSTed to datascience's `POST /process`
-   (`datascience_client.run_inspection_remote`). If only one device is
-   streaming, `run_single_frame_inspection_remote` is used instead.
-4. Datascience runs the full pipeline (see stages above) and returns one
-   `InspectionResult` JSON, including the two annotated frames.
-5. The backend stores the result (`result_store`, last 50 kept in memory).
-6. The dashboard polls `GET /stream/processed` and re-renders the two
-   annotated frames + PASS/FAIL badge on every auto-refresh tick.
+1. Both phones continuously send their latest photo to the backend
+   (`POST /upload`). The backend keeps only the newest photo from each phone.
+2. A few times a second, the backend grabs the latest photo from each phone,
+   confirms they were taken at roughly the same moment (within ~750 ms), and
+   pairs them up.
+3. It sends the pair to the datascience service for the full inspection (or,
+   if only one phone is live, sends the single photo instead).
+4. Datascience runs all the steps above and sends back one result — verdict,
+   details, and the two annotated images.
+5. The backend remembers the last 50 results.
+6. The dashboard keeps refreshing and shows the latest annotated images plus
+   the PASS / FAIL badge.
 
-**Upload mode (manual, sets the area-reference baseline):**
+**Upload mode (manual — this is how you set the "good sample"):**
 
-1. The operator uploads a vertical + horizontal image pair in the
-   dashboard's "Upload images" mode.
-2. `frontend` calls `POST /inspect` with both files — the backend marks
-   this `is_upload=True` and forwards to datascience the same way.
-3. Because `is_upload=True`, the 2D-dimensions stage also calls
-   `capture_reference_area()`, resetting the in-memory area baseline used
-   by the area-reference check on subsequent live inspections.
-4. The full detailed report (`render_full_result`) is shown, not just the
-   two processed streams.
+1. In the dashboard's "Upload images" mode, you upload one pair of photos.
+2. The backend runs the same inspection, but flags it as an upload.
+3. Because it's an upload, its measured size becomes the new **reference
+   baseline** that live products are compared against afterward.
+4. You get the full detailed report, not just the two quick images.
 
 ---
 
@@ -408,26 +368,6 @@ If it is missing, OCR reports `NOT_AVAILABLE` and the rest of the
 inspection still runs.
 
 ---
-
-## Known gaps in this checkout
-
-Worth knowing about before you assume something is broken:
-
-- **`pothole_yolov8_seg.pt` is not present** — pothole detection always
-  reports `NOT_AVAILABLE` until you add weights.
-- **No stereo/camera calibration saved** — `datascience/config/calibration/`
-  is empty, so 3D measurements are `NOT_AVAILABLE` and undistortion is a
-  no-op, until you run the calibration CLIs above.
-- **`yolo_pothole_segmentation.py` hardcodes `device="cuda"`** — will raise
-  on a machine without a CUDA-capable GPU/torch build, rather than falling
-  back to CPU like the defect detector does.
-- **`backend/main.py`'s module docstring says port 8000** — the actual
-  default (config.yaml, `start_all_services.py`, and every other reference)
-  is **5000**. Trust the config, not that comment.
-- `datascience/surface_defects/crack_detection.py`, `dent_detection.py`,
-  `scratch_detection.py`, `defect_filtering.py` are legacy classical-CV
-  detectors, superseded by `yolo_defect_detection.py` and no longer called
-  by the pipeline — kept for reference only.
 
 ## Troubleshooting
 
