@@ -12,7 +12,7 @@ over HTTP — no shared code, no shared config:
 flowchart TB
     Phones["Two Android phones<br/>(QC_Hackathon.apk)"]
     Backend["backend (FastAPI)<br/>upload · pairing · orchestration<br/>continuous inspection loop"]
-    Datascience["datascience (FastAPI) <br/>· Canny edges(2D dims) <br/>YOLO defects (Crack/Dent) <br/>· OCR <br/>· quality rules"]
+    Datascience["datascience (FastAPI) <br/>· Canny edges(2D dims) <br/>Quantized YOLO v8 (Crack/Dent) <br/>· OCR <br/>· quality rules"]
     Frontend["frontend (Streamlit)<br/>dashboard"]
 
     Phones -->|"POST JPEG frames<br/>(multipart: frame, device_id, timestamp)"| Backend
@@ -441,3 +441,33 @@ Worth knowing about before you assume something is broken:
   the backend.
 - **Pothole stage errors on a CPU-only machine** — see the CUDA note under
   [Known gaps](#known-gaps-in-this-checkout).
+
+---
+
+## Sequence diagram — one live inspection cycle
+
+```mermaid
+sequenceDiagram
+    participant P as Phones
+    participant B as backend
+    participant D as datascience
+    participant F as frontend
+
+    loop every frame
+        P->>B: POST /upload (frame, device_id, timestamp)
+        B-->>B: frame_store.update()
+    end
+
+    loop every interval_sec (continuous inspection)
+        B->>B: frame_pairing.get_latest_pair()
+        B->>D: POST /process (vertical + horizontal, base64)
+        D-->>D: preprocess -> OCR (parallel) -> 2D/3D dims -> YOLO defects -> pothole -> quality rules -> annotate
+        D->>B: InspectionResult JSON (incl. annotated frames)
+        B-->>B: result_store.add()
+    end
+
+    loop every refresh tick
+        F->>B: GET /stream/processed
+        B->>F: annotated frames + PASS/FAIL + failure_reasons
+    end
+```
